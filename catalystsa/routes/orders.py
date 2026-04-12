@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from database import SessionLocal
-from models import Order, Product
-from schemas import OrderCreate
+from catalystsa.database import SessionLocal
+from catalystsa.models import Order, Product
+from catalystsa.schemas import OrderCreate
 
 router = APIRouter()
 

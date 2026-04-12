@@ -1,6 +1,6 @@
 from fastapi import FastAPI
-from database import Base, engine
-from routes import products, orders
+from catalystsa.database import Base, engine
+from catalystsa.routes import products, orders
 
 app = FastAPI()
 
