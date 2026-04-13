@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from catalystsa.database import Base, engine
-from catalystsa.routes import products, orders, payments
+from catalystsa.routes import products, orders, payments, webhooks
 
 app = FastAPI()
 
@@ -25,6 +25,7 @@ Base.metadata.create_all(bind=engine)
 app.include_router(products.router, prefix="/products", tags=["Products"])
 app.include_router(orders.router, prefix="/orders", tags=["Orders"])
 app.include_router(payments.router, prefix="/payments", tags=["Payments"])
+app.include_router(webhooks.router, prefix="/yoco", tags=["Webhooks"])
 
 
 @app.get("/")

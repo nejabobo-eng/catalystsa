@@ -33,6 +33,7 @@ def create_checkout(payload: CheckoutRequest):
         "currency": payload.currency,
         "successUrl": payload.successUrl,
         "cancelUrl": payload.cancelUrl,
+        "webhookUrl": "https://catalystsa.onrender.com/yoco/webhook",  # ⚡ CRITICAL
         "metadata": {
             "source": "catalystsa-store"
         }
