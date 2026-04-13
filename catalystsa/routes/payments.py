@@ -18,6 +18,7 @@ class CheckoutRequest(BaseModel):
 @router.post("/checkout")
 def create_checkout(payload: CheckoutRequest):
     if not YOCO_SECRET_KEY:
+        print("ERROR: YOCO_SECRET_KEY not configured")
         raise HTTPException(status_code=500, detail="Yoco key not configured")
 
     url = "https://payments.yoco.com/api/checkouts"
@@ -31,12 +32,32 @@ def create_checkout(payload: CheckoutRequest):
         "amount": payload.amount * 100,  # Convert rands to cents
         "currency": payload.currency,
         "successUrl": payload.successUrl,
-        "cancelUrl": payload.cancelUrl
+        "cancelUrl": payload.cancelUrl,
+        "metadata": {
+            "source": "catalystsa-store"
+        }
     }
+
+    print(f"=== YOCO REQUEST ===")
+    print(f"URL: {url}")
+    print(f"Headers: Authorization Bearer {YOCO_SECRET_KEY[:10]}...")
+    print(f"Data: {data}")
 
     try:
         response = requests.post(url, json=data, headers=headers)
-        response.raise_for_status()
+        
+        print(f"=== YOCO RESPONSE ===")
+        print(f"Status Code: {response.status_code}")
+        print(f"Response Body: {response.text}")
+        
+        if response.status_code != 200 and response.status_code != 201:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Yoco API error: {response.text}"
+            )
+        
         return response.json()
     except requests.exceptions.RequestException as e:
+        print(f"=== REQUEST EXCEPTION ===")
+        print(f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Yoco API error: {str(e)}")
