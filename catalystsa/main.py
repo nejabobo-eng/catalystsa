@@ -1,8 +1,24 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from catalystsa.database import Base, engine
 from catalystsa.routes import products, orders, payments
 
 app = FastAPI()
+
+# Configure CORS
+origins = [
+    "http://localhost:3000",
+    "https://catalystsa-frontend.vercel.app",
+    "https://*.vercel.app",  # Allow all Vercel preview deployments
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 Base.metadata.create_all(bind=engine)
 
