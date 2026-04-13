@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 from sqlalchemy.orm import Session
 from catalystsa.database import SessionLocal
 from catalystsa.models import Order
@@ -51,7 +51,7 @@ async def handle_payment_success(payload):
     """
     Handle successful payment
     """
-    db = next(get_db())
+    db = SessionLocal()
     
     try:
         data = payload.get("data", {})
@@ -97,7 +97,7 @@ async def handle_payment_failed(payload):
     """
     Handle failed payment
     """
-    db = next(get_db())
+    db = SessionLocal()
     
     try:
         data = payload.get("data", {})
@@ -123,26 +123,46 @@ async def handle_payment_failed(payload):
 
 
 @router.get("/orders")
-def get_all_orders(db: Session = next(get_db())):
+def get_all_orders(db: Session = Depends(get_db)):
     """
     Get all orders (for admin panel)
     """
-    try:
-        orders = db.query(Order).order_by(Order.created_at.desc()).all()
-        return orders
-    finally:
-        db.close()
+    orders = db.query(Order).order_by(Order.created_at.desc()).all()
+    
+    # Convert to dict to avoid Pydantic serialization issues
+    return [
+        {
+            "id": order.id,
+            "checkout_id": order.checkout_id,
+            "amount": order.amount,
+            "currency": order.currency,
+            "status": order.status,
+            "created_at": order.created_at.isoformat() if order.created_at else None,
+            "paid_at": order.paid_at.isoformat() if order.paid_at else None,
+        }
+        for order in orders
+    ]
 
 
 @router.get("/orders/{order_id}")
-def get_order(order_id: int, db: Session = next(get_db())):
+def get_order(order_id: int, db: Session = Depends(get_db)):
     """
     Get specific order details
     """
-    try:
-        order = db.query(Order).filter(Order.id == order_id).first()
-        if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
-        return order
-    finally:
-        db.close()
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    return {
+        "id": order.id,
+        "checkout_id": order.checkout_id,
+        "amount": order.amount,
+        "currency": order.currency,
+        "status": order.status,
+        "customer_name": order.customer_name,
+        "customer_email": order.customer_email,
+        "phone": order.phone,
+        "address": order.address,
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+        "paid_at": order.paid_at.isoformat() if order.paid_at else None,
+    }
