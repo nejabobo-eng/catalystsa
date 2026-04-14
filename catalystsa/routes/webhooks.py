@@ -237,41 +237,11 @@ def get_all_orders(db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/{email}")
+@router.get("/orders/{email}")
 def get_orders(email: str, db: Session = Depends(get_db)):
     """
-    Get orders by customer email (shorthand endpoint for frontend)
-    """
-    orders = db.query(Order).filter(
-        Order.customer_email == email.lower()
-    ).order_by(Order.created_at.desc()).all()
-
-    return [
-        {
-            "id": order.id,
-            "order_number": order.order_number,
-            "checkout_id": order.checkout_id,
-            "amount": order.amount,
-            "delivery_fee": order.delivery_fee,
-            "currency": order.currency,
-            "status": order.status,
-            "customer_name": order.customer_name,
-            "customer_email": order.customer_email,
-            "phone": order.phone,
-            "address": order.address,
-            "city": order.city,
-            "postal_code": order.postal_code,
-            "created_at": order.created_at.isoformat() if order.created_at else None,
-            "paid_at": order.paid_at.isoformat() if order.paid_at else None,
-        }
-        for order in orders
-    ]
-
-
-@router.get("/orders/by-email/{email}")
-def get_orders_by_email(email: str, db: Session = Depends(get_db)):
-    """
     Get orders by customer email
+    Maps to /yoco/orders/{email} (frontend endpoint)
     """
     orders = db.query(Order).filter(
         Order.customer_email == email.lower()
