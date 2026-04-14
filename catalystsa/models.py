@@ -16,6 +16,13 @@ class Product(Base):
     in_stock = Column(Boolean, default=True)
 
 
+class OrderSequence(Base):
+    __tablename__ = "order_sequence"
+
+    id = Column(Integer, primary_key=True, index=True, default=1)
+    last_order_number = Column(Integer, default=0)  # Tracks highest order number issued
+
+
 class Order(Base):
     __tablename__ = "orders"
 
@@ -24,7 +31,7 @@ class Order(Base):
     checkout_id = Column(String, unique=True, index=True)
     amount = Column(Integer)  # in cents (total after delivery)
     currency = Column(String, default="ZAR")
-    status = Column(String, default="pending")  # pending, paid, failed
+    status = Column(String, default="paid")  # pending, paid, processing, shipped, delivered, failed
     customer_name = Column(String, nullable=True)
     customer_email = Column(String, nullable=True)
     phone = Column(String, nullable=True)
