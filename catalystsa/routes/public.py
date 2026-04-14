@@ -1,14 +1,13 @@
 """
 Public API routes for customers
 No authentication required
+Single source of truth for order lookup
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import text
 from catalystsa.database import SessionLocal
-import logging
+from catalystsa.models import Order, WebhookEvent
 
-logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -20,30 +19,54 @@ def get_db():
         db.close()
 
 
-@router.get("/debug/schema")
-def debug_schema(db: Session = Depends(get_db)):
+@router.get("/debug/all-orders")
+def debug_all_orders(db: Session = Depends(get_db)):
     """
-    Debug endpoint: show actual orders table schema
+    DIAGNOSTIC ENDPOINT: Show all orders in database
+    Use to check if webhook is actually creating orders
     """
-    try:
-        # Query information_schema to see what columns actually exist
-        query = text("""
-            SELECT column_name, data_type
-            FROM information_schema.columns
-            WHERE table_name = 'orders'
-            ORDER BY ordinal_position
-        """)
+    all_orders = db.query(Order).order_by(Order.created_at.desc()).all()
 
-        result = db.execute(query)
-        columns = result.fetchall()
+    return {
+        "total_orders": len(all_orders),
+        "orders": [
+            {
+                "id": order.id,
+                "order_number": order.order_number,
+                "checkout_id": order.checkout_id,
+                "customer_email": order.customer_email,
+                "status": order.status,
+                "amount": order.amount,
+                "created_at": order.created_at.isoformat() if order.created_at else None,
+            }
+            for order in all_orders
+        ]
+    }
 
-        return {
-            "table": "orders",
-            "columns": [{"name": col[0], "type": col[1]} for col in columns]
-        }
-    except Exception as e:
-        logger.error(f"Error getting schema: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@router.get("/debug/webhook-events")
+def debug_webhook_events(db: Session = Depends(get_db)):
+    """
+    DIAGNOSTIC ENDPOINT: Show webhook events
+    Use to check if Yoco is sending webhooks at all
+    """
+    events = db.query(WebhookEvent).order_by(WebhookEvent.received_at.desc()).limit(20).all()
+
+    return {
+        "total_events": len(events),
+        "events": [
+            {
+                "checkout_id": event.checkout_id,
+                "event_type": event.event_type,
+                "status": event.status,
+                "order_created": event.order_created,
+                "order_number": event.order_number,
+                "received_at": event.received_at.isoformat() if event.received_at else None,
+                "error_message": event.error_message,
+            }
+            for event in events
+        ]
+    }
 
 
 @router.get("/public/orders/{email}")
@@ -51,44 +74,32 @@ def get_public_orders(email: str, db: Session = Depends(get_db)):
     """
     Get orders by customer email - PUBLIC ENDPOINT
 
-    Uses minimal columns that we know exist.
-    """
-    try:
-        normalized_email = email.strip().lower()
+    Single source of truth for order lookup.
 
-        logger.info(f"Looking up orders for email: {normalized_email}")
-
-        # Query only order_number and status (safest columns)
-        query = text("""
-            SELECT id, order_number, status
-            FROM orders
-            WHERE LOWER(customer_email) = :email
-            ORDER BY id DESC
-            LIMIT 10
-        """)
-
-        result = db.execute(query, {"email": normalized_email})
-        rows = result.fetchall()
-
-        logger.info(f"Found {len(rows)} orders for {normalized_email}")
-
-        # Build response
-        order_list = []
-        for row in rows:
-            try:
-                order_dict = {
-                    "order_number": row[1],
-                    "status": row[2] if row[2] else "unknown",
-                }
-                order_list.append(order_dict)
-            except Exception as e:
-                logger.error(f"Error processing order row: {str(e)}", exc_info=True)
-                continue
-
-        return {
-            "email": normalized_email,
-            "orders": order_list
+    Request: GET /public/orders/{email}
+    Response: {
+      "email": "customer@example.com",
+      "orders": [
+        {
+          "order_number": 10001,
+          "status": "paid"
         }
-    except Exception as e:
-        logger.error(f"Error in get_public_orders: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+      ]
+    }
+    """
+    normalized_email = email.strip().lower()
+
+    orders = db.query(Order).filter(
+        Order.customer_email == normalized_email
+    ).order_by(Order.created_at.desc()).limit(10).all()
+
+    return {
+        "email": normalized_email,
+        "orders": [
+            {
+                "order_number": order.order_number,
+                "status": order.status,
+            }
+            for order in orders
+        ]
+    }
