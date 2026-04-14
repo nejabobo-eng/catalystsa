@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from catalystsa.database import SessionLocal
 from catalystsa.models import Product
 from catalystsa.schemas import ProductCreate
 from catalystsa.pricing import calculate_price
+from catalystsa.admin_auth import verify_token
 
 router = APIRouter()
 
@@ -16,8 +17,28 @@ def get_db():
         db.close()
 
 
+def verify_admin_header(authorization: str = Header(None)):
+    """
+    Verify admin token from Authorization header
+    Header format: Authorization: Bearer {token}
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="No authorization header")
+
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Invalid authorization header format")
+
+    token = parts[1]
+    return verify_token(token)
+
+
 @router.post("/")
-def create_product(product: ProductCreate, db: Session = Depends(get_db)):
+def create_product(product: ProductCreate, db: Session = Depends(get_db), admin=Depends(verify_admin_header)):
+    """
+    Create new product (admin only)
+    Requires: Authorization: Bearer {token} header
+    """
     try:
         price = calculate_price(product.cost)
     except ValueError as e:
