@@ -240,33 +240,68 @@ def get_all_orders(db: Session = Depends(get_db)):
 @router.get("/orders/{email}")
 def get_orders(email: str, db: Session = Depends(get_db)):
     """
-    Get orders by customer email
-    Maps to /yoco/orders/{email} (frontend endpoint)
+    Get orders by customer email + verification
+    DEPRECATED: Use /lookup instead
+    Only returns order_number to avoid data exposure
     """
     orders = db.query(Order).filter(
         Order.customer_email == email.lower()
-    ).order_by(Order.created_at.desc()).all()
+    ).order_by(Order.created_at.desc()).limit(10).all()
 
+    # Return minimal data to prevent scraping
     return [
         {
-            "id": order.id,
             "order_number": order.order_number,
-            "checkout_id": order.checkout_id,
-            "amount": order.amount,
-            "delivery_fee": order.delivery_fee,
-            "currency": order.currency,
-            "status": order.status,
-            "customer_name": order.customer_name,
-            "customer_email": order.customer_email,
-            "phone": order.phone,
-            "address": order.address,
-            "city": order.city,
-            "postal_code": order.postal_code,
             "created_at": order.created_at.isoformat() if order.created_at else None,
-            "paid_at": order.paid_at.isoformat() if order.paid_at else None,
         }
         for order in orders
     ]
+
+
+@router.post("/orders/lookup")
+def lookup_order(payload: dict, db: Session = Depends(get_db)):
+    """
+    Secure order lookup: requires email + order number
+    Prevents data scraping by requiring verification
+
+    Request body:
+    {
+        "email": "customer@example.com",
+        "order_number": 10001
+    }
+    """
+    email = payload.get("email", "").strip().lower()
+    order_number = payload.get("order_number")
+
+    if not email or not order_number:
+        raise HTTPException(status_code=400, detail="Email and order number required")
+
+    order = db.query(Order).filter(
+        (Order.customer_email == email) & 
+        (Order.order_number == order_number)
+    ).first()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    # Return full order details only if both email AND order_number match
+    return {
+        "id": order.id,
+        "order_number": order.order_number,
+        "checkout_id": order.checkout_id,
+        "amount": order.amount,
+        "delivery_fee": order.delivery_fee,
+        "currency": order.currency,
+        "status": order.status,
+        "customer_name": order.customer_name,
+        "customer_email": order.customer_email,
+        "phone": order.phone,
+        "address": order.address,
+        "city": order.city,
+        "postal_code": order.postal_code,
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+        "paid_at": order.paid_at.isoformat() if order.paid_at else None,
+    }
 
 
 @router.get("/orders/number/{order_number}")
