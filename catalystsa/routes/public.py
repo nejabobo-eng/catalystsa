@@ -87,19 +87,31 @@ def get_public_orders(email: str, db: Session = Depends(get_db)):
       ]
     }
     """
-    normalized_email = email.strip().lower()
+    try:
+        normalized_email = email.strip().lower()
 
-    orders = db.query(Order).filter(
-        Order.customer_email == normalized_email
-    ).order_by(Order.created_at.desc()).limit(10).all()
+        orders = db.query(Order).filter(
+            Order.customer_email == normalized_email
+        ).order_by(Order.created_at.desc()).limit(10).all()
 
-    return {
-        "email": normalized_email,
-        "orders": [
-            {
-                "order_number": order.order_number,
-                "status": order.status,
-            }
-            for order in orders
-        ]
-    }
+        return {
+            "email": normalized_email,
+            "orders": [
+                {
+                    "order_number": order.order_number,
+                    "status": order.status,
+                }
+                for order in orders
+            ]
+        }
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"ERROR in get_public_orders: {str(e)}")
+        print(error_trace)
+        return {
+            "email": email,
+            "orders": [],
+            "error": str(e),
+            "debug": "Check backend logs for full traceback"
+        }
