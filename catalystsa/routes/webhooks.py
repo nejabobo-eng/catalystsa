@@ -59,10 +59,26 @@ async def handle_payment_success(payload):
         amount = data.get("totalAmount")  # in cents
         currency = data.get("currency", "ZAR")
         metadata = data.get("metadata", {})
+
+        # Extract customer data from metadata
         customer_email = metadata.get("customer_email", "").lower() if metadata else ""
+        customer_name = metadata.get("customer_name", "").strip() if metadata else ""
+        phone = metadata.get("phone", "").strip() if metadata else ""
+        address = metadata.get("address", "").strip() if metadata else ""
+        city = metadata.get("city", "").strip() if metadata else ""
+        postal_code = metadata.get("postal_code", "").strip() if metadata else ""
+        delivery_fee_str = metadata.get("delivery_fee", "0") if metadata else "0"
+        items_str = metadata.get("items", "{}") if metadata else "{}"
+
+        # Convert delivery fee string to int (cents)
+        try:
+            delivery_fee_cents = int(float(delivery_fee_str) * 100)
+        except (ValueError, TypeError):
+            delivery_fee_cents = 0
 
         print(f"✅ Payment SUCCESS: {checkout_id} - {amount} {currency}")
-        print(f"   Customer Email: {customer_email}")
+        print(f"   Customer: {customer_name} ({customer_email})")
+        print(f"   Address: {address}, {city}")
 
         # Check if order already exists
         existing_order = db.query(Order).filter(Order.checkout_id == checkout_id).first()
@@ -73,19 +89,35 @@ async def handle_payment_success(payload):
             existing_order.paid_at = datetime.utcnow()
             if customer_email:
                 existing_order.customer_email = customer_email
+            if customer_name:
+                existing_order.customer_name = customer_name
             print(f"Updated existing order: {existing_order.id}")
         else:
-            # Create new order
+            # Generate order number: base 10000 + id
+            # First, create the order to get an ID, then update with order_number
             new_order = Order(
                 checkout_id=checkout_id,
                 amount=amount,
                 currency=currency,
                 status="paid",
                 paid_at=datetime.utcnow(),
-                customer_email=customer_email if customer_email else None
+                customer_email=customer_email if customer_email else None,
+                customer_name=customer_name if customer_name else None,
+                phone=phone if phone else None,
+                address=address if address else None,
+                city=city if city else None,
+                postal_code=postal_code if postal_code else None,
+                delivery_fee=delivery_fee_cents if delivery_fee_cents > 0 else None,
+                items=items_str if items_str else None
             )
             db.add(new_order)
-            print(f"Created new order for checkout: {checkout_id}")
+            db.flush()  # Flush to get the ID without committing
+
+            # Generate order number
+            order_number = 10000 + new_order.id
+            new_order.order_number = order_number
+
+            print(f"Created new order #{order_number} for checkout: {checkout_id}")
 
         db.commit()
 
@@ -186,14 +218,49 @@ def get_orders_by_email(email: str, db: Session = Depends(get_db)):
     return [
         {
             "id": order.id,
+            "order_number": order.order_number,
             "checkout_id": order.checkout_id,
             "amount": order.amount,
+            "delivery_fee": order.delivery_fee,
             "currency": order.currency,
             "status": order.status,
             "customer_name": order.customer_name,
             "customer_email": order.customer_email,
+            "phone": order.phone,
+            "address": order.address,
+            "city": order.city,
+            "postal_code": order.postal_code,
             "created_at": order.created_at.isoformat() if order.created_at else None,
             "paid_at": order.paid_at.isoformat() if order.paid_at else None,
         }
         for order in orders
     ]
+
+
+@router.get("/orders/number/{order_number}")
+def get_order_by_number(order_number: int, db: Session = Depends(get_db)):
+    """
+    Get specific order by order number (e.g., #10001)
+    """
+    order = db.query(Order).filter(Order.order_number == order_number).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    return {
+        "id": order.id,
+        "order_number": order.order_number,
+        "checkout_id": order.checkout_id,
+        "amount": order.amount,
+        "delivery_fee": order.delivery_fee,
+        "currency": order.currency,
+        "status": order.status,
+        "customer_name": order.customer_name,
+        "customer_email": order.customer_email,
+        "phone": order.phone,
+        "address": order.address,
+        "city": order.city,
+        "postal_code": order.postal_code,
+        "items": order.items,
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+        "paid_at": order.paid_at.isoformat() if order.paid_at else None,
+    }

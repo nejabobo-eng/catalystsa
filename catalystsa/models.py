@@ -20,14 +20,19 @@ class Order(Base):
     __tablename__ = "orders"
 
     id = Column(Integer, primary_key=True, index=True)
+    order_number = Column(Integer, unique=True, index=True, nullable=True)  # e.g., 10001, 10002
     checkout_id = Column(String, unique=True, index=True)
-    amount = Column(Integer)  # in cents
+    amount = Column(Integer)  # in cents (total after delivery)
     currency = Column(String, default="ZAR")
     status = Column(String, default="pending")  # pending, paid, failed
     customer_name = Column(String, nullable=True)
     customer_email = Column(String, nullable=True)
     phone = Column(String, nullable=True)
     address = Column(String, nullable=True)
+    city = Column(String, nullable=True)
+    postal_code = Column(String, nullable=True)
+    delivery_fee = Column(Integer, nullable=True)  # in cents
+    items = Column(String, nullable=True)  # JSON string of cart items
     payment_method = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     paid_at = Column(DateTime, nullable=True)

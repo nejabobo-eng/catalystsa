@@ -9,11 +9,18 @@ YOCO_SECRET_KEY = os.getenv("YOCO_SECRET_KEY")
 
 
 class CheckoutRequest(BaseModel):
-    amount: float  # in rands
+    amount: float  # in rands (subtotal before delivery)
     currency: str = "ZAR"
     successUrl: str
     cancelUrl: str
     email: str = None  # customer email
+    name: str = None  # customer name
+    phone: str = None  # customer phone
+    address: str = None  # street address
+    city: str = None  # city
+    postal_code: str = None  # postal code
+    items: list = None  # cart items [{name, quantity, price}, ...]
+    delivery_fee: float = 0  # in rands
 
 
 @router.post("/checkout")
@@ -35,16 +42,25 @@ def create_checkout(payload: CheckoutRequest):
 
     # Convert rands to cents (round to nearest cent)
     amount_cents = int(round(payload.amount * 100))
+    delivery_fee_cents = int(round(payload.delivery_fee * 100)) if payload.delivery_fee else 0
+    total_cents = amount_cents + delivery_fee_cents
 
     data = {
-        "amount": amount_cents,
+        "amount": total_cents,
         "currency": payload.currency,
         "successUrl": payload.successUrl,
         "cancelUrl": payload.cancelUrl,
         "webhookUrl": "https://catalystsa.onrender.com/yoco/webhook",  # ⚡ CRITICAL
         "metadata": {
             "source": "catalystsa-store",
-            "customer_email": payload.email or ""
+            "customer_email": payload.email or "",
+            "customer_name": payload.name or "",
+            "phone": payload.phone or "",
+            "address": payload.address or "",
+            "city": payload.city or "",
+            "postal_code": payload.postal_code or "",
+            "delivery_fee": payload.delivery_fee or 0,
+            "items": str(payload.items) if payload.items else ""
         }
     }
 
