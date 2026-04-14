@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text
 from datetime import datetime
 from catalystsa.database import Base
 
@@ -43,3 +43,28 @@ class Order(Base):
     payment_method = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     paid_at = Column(DateTime, nullable=True)
+
+
+class WebhookEvent(Base):
+    """
+    Transaction safety log: tracks every webhook event for debugging and reconciliation
+
+    Purpose:
+    - Debug payment→order flow issues
+    - Detect duplicate or missing events
+    - Provide audit trail for money flow
+    """
+    __tablename__ = "webhook_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    webhook_event_id = Column(String, unique=True, index=True, nullable=True)  # From Yoco (if provided)
+    checkout_id = Column(String, index=True)  # Reference to payment/order
+    event_type = Column(String, index=True)  # e.g., "payment.succeeded", "payment.failed"
+    status = Column(String, index=True)  # "success", "failed", "duplicate", "invalid"
+    error_message = Column(Text, nullable=True)  # Detailed error if failed
+    order_created = Column(Boolean, default=False)  # Did this event create an order?
+    order_number = Column(Integer, nullable=True, index=True)  # Reference to created order
+    raw_payload = Column(Text, nullable=True)  # Full webhook payload for debugging
+    received_at = Column(DateTime, default=datetime.utcnow, index=True)
+    processed_at = Column(DateTime, nullable=True)
+
