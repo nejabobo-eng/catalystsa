@@ -13,6 +13,7 @@ class CheckoutRequest(BaseModel):
     currency: str = "ZAR"
     successUrl: str
     cancelUrl: str
+    email: str = None  # customer email
 
 
 @router.post("/checkout")
@@ -42,7 +43,8 @@ def create_checkout(payload: CheckoutRequest):
         "cancelUrl": payload.cancelUrl,
         "webhookUrl": "https://catalystsa.onrender.com/yoco/webhook",  # ⚡ CRITICAL
         "metadata": {
-            "source": "catalystsa-store"
+            "source": "catalystsa-store",
+            "customer_email": payload.email or ""
         }
     }
 

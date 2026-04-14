@@ -52,22 +52,27 @@ async def handle_payment_success(payload):
     Handle successful payment
     """
     db = SessionLocal()
-    
+
     try:
         data = payload.get("data", {})
         checkout_id = data.get("id")
         amount = data.get("totalAmount")  # in cents
         currency = data.get("currency", "ZAR")
-        
+        metadata = data.get("metadata", {})
+        customer_email = metadata.get("customer_email", "").lower() if metadata else ""
+
         print(f"✅ Payment SUCCESS: {checkout_id} - {amount} {currency}")
-        
+        print(f"   Customer Email: {customer_email}")
+
         # Check if order already exists
         existing_order = db.query(Order).filter(Order.checkout_id == checkout_id).first()
-        
+
         if existing_order:
             # Update existing order
             existing_order.status = "paid"
             existing_order.paid_at = datetime.utcnow()
+            if customer_email:
+                existing_order.customer_email = customer_email
             print(f"Updated existing order: {existing_order.id}")
         else:
             # Create new order
@@ -76,15 +81,16 @@ async def handle_payment_success(payload):
                 amount=amount,
                 currency=currency,
                 status="paid",
-                paid_at=datetime.utcnow()
+                paid_at=datetime.utcnow(),
+                customer_email=customer_email if customer_email else None
             )
             db.add(new_order)
             print(f"Created new order for checkout: {checkout_id}")
-        
+
         db.commit()
-        
+
         return {"status": "success", "message": "Payment processed"}
-    
+
     except Exception as e:
         db.rollback()
         print(f"Error processing payment: {str(e)}")
@@ -152,7 +158,7 @@ def get_order(order_id: int, db: Session = Depends(get_db)):
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    
+
     return {
         "id": order.id,
         "checkout_id": order.checkout_id,
@@ -166,3 +172,28 @@ def get_order(order_id: int, db: Session = Depends(get_db)):
         "created_at": order.created_at.isoformat() if order.created_at else None,
         "paid_at": order.paid_at.isoformat() if order.paid_at else None,
     }
+
+
+@router.get("/orders/{email}")
+def get_orders_by_email(email: str, db: Session = Depends(get_db)):
+    """
+    Get orders by customer email
+    """
+    orders = db.query(Order).filter(
+        Order.customer_email == email.lower()
+    ).order_by(Order.created_at.desc()).all()
+
+    return [
+        {
+            "id": order.id,
+            "checkout_id": order.checkout_id,
+            "amount": order.amount,
+            "currency": order.currency,
+            "status": order.status,
+            "customer_name": order.customer_name,
+            "customer_email": order.customer_email,
+            "created_at": order.created_at.isoformat() if order.created_at else None,
+            "paid_at": order.paid_at.isoformat() if order.paid_at else None,
+        }
+        for order in orders
+    ]
