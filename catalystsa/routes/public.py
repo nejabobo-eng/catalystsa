@@ -20,39 +20,50 @@ def get_db():
         db.close()
 
 
+@router.get("/debug/schema")
+def debug_schema(db: Session = Depends(get_db)):
+    """
+    Debug endpoint: show actual orders table schema
+    """
+    try:
+        # Query information_schema to see what columns actually exist
+        query = text("""
+            SELECT column_name, data_type
+            FROM information_schema.columns
+            WHERE table_name = 'orders'
+            ORDER BY ordinal_position
+        """)
+
+        result = db.execute(query)
+        columns = result.fetchall()
+
+        return {
+            "table": "orders",
+            "columns": [{"name": col[0], "type": col[1]} for col in columns]
+        }
+    except Exception as e:
+        logger.error(f"Error getting schema: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
 @router.get("/public/orders/{email}")
 def get_public_orders(email: str, db: Session = Depends(get_db)):
     """
     Get orders by customer email - PUBLIC ENDPOINT
 
-    Single source of truth for order lookup.
-    Uses raw SQL to avoid schema mismatch issues.
-
-    Request: GET /public/orders/{email}
-    Response: {
-      "email": "customer@example.com",
-      "orders": [
-        {
-          "order_number": 10001,
-          "status": "paid",
-          "total": 500,
-          "created_at": "2024-04-14T..."
-        }
-      ]
-    }
+    Uses minimal columns that we know exist.
     """
     try:
         normalized_email = email.strip().lower()
 
         logger.info(f"Looking up orders for email: {normalized_email}")
 
-        # Use raw SQL to avoid SQLAlchemy schema mismatch
-        # Only SELECT columns we KNOW exist: order_number, status, created_at
+        # Query only order_number and status (safest columns)
         query = text("""
-            SELECT order_number, status, created_at
+            SELECT id, order_number, status
             FROM orders
             WHERE LOWER(customer_email) = :email
-            ORDER BY created_at DESC
+            ORDER BY id DESC
             LIMIT 10
         """)
 
@@ -66,10 +77,8 @@ def get_public_orders(email: str, db: Session = Depends(get_db)):
         for row in rows:
             try:
                 order_dict = {
-                    "order_number": row[0],
-                    "status": row[1],
-                    "created_at": row[2].isoformat() if row[2] else None,
-                    "total": 0,  # We can't reliably get total without knowing the column name
+                    "order_number": row[1],
+                    "status": row[2] if row[2] else "unknown",
                 }
                 order_list.append(order_dict)
             except Exception as e:
