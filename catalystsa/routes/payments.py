@@ -9,7 +9,7 @@ YOCO_SECRET_KEY = os.getenv("YOCO_SECRET_KEY")
 
 
 class CheckoutRequest(BaseModel):
-    amount: int  # in rands
+    amount: float  # in rands
     currency: str = "ZAR"
     successUrl: str
     cancelUrl: str
@@ -28,8 +28,15 @@ def create_checkout(payload: CheckoutRequest):
         "Content-Type": "application/json"
     }
 
+    # Validate amount
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be greater than 0")
+
+    # Convert rands to cents (round to nearest cent)
+    amount_cents = int(round(payload.amount * 100))
+
     data = {
-        "amount": payload.amount * 100,  # Convert rands to cents
+        "amount": amount_cents,
         "currency": payload.currency,
         "successUrl": payload.successUrl,
         "cancelUrl": payload.cancelUrl,
