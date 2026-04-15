@@ -46,10 +46,10 @@ def log_webhook_event(db: Session, checkout_id: str, event_type: str, status: st
 
 
 @router.post("/webhook")
-async def yoco_webhook(request: Request):
+async def yoco_webhook(request: Request, db: Session = Depends(get_db)):
     """
     Yoco webhook handler — TRANSACTION SAFETY CRITICAL
-    
+
     RULES (non-negotiable):
     1. ALWAYS return 200 OK (even on error)
     2. NEVER crash publicly
@@ -57,40 +57,36 @@ async def yoco_webhook(request: Request):
     4. Order creation is IDEMPOTENT (safe to retry)
     5. Email failures do NOT block order creation
     """
-    db = SessionLocal()
-    
     try:
         payload = await request.json()
-        
+
         logger.info("=" * 60)
         logger.info("YOCO WEBHOOK RECEIVED")
         logger.info("=" * 60)
-        
+
         event_type = payload.get("type")
         checkout_id = payload.get("data", {}).get("id")
-        
+
         if not checkout_id:
             logger.error("Webhook missing checkout_id — cannot process")
             return {"status": "received", "error": "missing checkout_id"}
-        
+
         logger.info(f"Event type: {event_type}, Checkout: {checkout_id}")
-        
+
         if event_type == "payment.succeeded":
             return await handle_payment_success(payload, db)
-        
+
         elif event_type == "payment.failed":
             return await handle_payment_failed(payload, db)
-        
+
         else:
             logger.info(f"Unknown event type: {event_type}, ignoring")
             log_webhook_event(db, checkout_id, event_type, "ignored")
             return {"status": "received", "message": "Event type not handled"}
-    
+
     except Exception as e:
         logger.error(f"CRITICAL: Webhook processing error: {str(e)}", exc_info=True)
         return {"status": "received", "error": "processing error logged"}
-    finally:
-        db.close()
 
 
 async def handle_payment_success(payload, db: Session):
