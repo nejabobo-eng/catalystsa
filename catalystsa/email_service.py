@@ -81,9 +81,9 @@ def send_customer_order_confirmation(order):
                 
                 <h3>Track Your Order</h3>
                 <p>
-                    <a href="{FRONTEND_URL}/orders/{order_number}" 
+                    <a href="{FRONTEND_URL}/orders?email={customer_email}" 
                        style="background-color: #16a34a; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
-                        View Order Details
+                        View Your Orders
                     </a>
                 </p>
                 
