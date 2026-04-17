@@ -76,6 +76,7 @@ def debug_webhook_events(db: Session = Depends(get_db)):
                     "order_number": event.order_number,
                     "received_at": event.received_at.isoformat() if event.received_at else None,
                     "error_message": event.error_message,
+                    "raw_payload": event.raw_payload,  # Include raw payload for debugging
                 }
                 for event in events
             ]
