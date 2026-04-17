@@ -51,9 +51,9 @@ def log_webhook_event(db: Session, checkout_id: str, event_type: str, status: st
 @router.post("/webhook")
 async def yoco_webhook(request: Request, db: Session = Depends(get_db)):
     """
-    Yoco webhook handler — TRANSACTION SAFETY CRITICAL
+    Yoco webhook handler — PRODUCTION-SAFE
 
-    Yoco actually sends (confirmed from logs):
+    Contract (observed from real webhooks):
     {
       "type": "payment.succeeded" | "payment.failed",
       "data": {
@@ -64,11 +64,11 @@ async def yoco_webhook(request: Request, db: Session = Depends(get_db)):
       }
     }
 
-    RULES:
-    1. ALWAYS return 200 OK (even on error)
-    2. Match by checkout_id ONLY (deterministic)
-    3. Log all events for debugging
-    4. Idempotent (safe to retry)
+    GUARANTEES:
+    1. Idempotent - safe for Yoco retries
+    2. Deterministic - checkout_id is single source of truth
+    3. Never creates duplicate orders
+    4. Always returns 200 OK (Yoco requirement)
     """
     try:
         payload = await request.json()
@@ -78,13 +78,14 @@ async def yoco_webhook(request: Request, db: Session = Depends(get_db)):
         logger.info("=" * 60)
         logger.info(f"FULL PAYLOAD: {json.dumps(payload, indent=2)}")
 
-        # Extract from actual Yoco structure (confirmed from webhook logs)
+        # Extract from observed Yoco structure
         event_type = payload.get("type")
         data = payload.get("data", {})
         checkout_id = data.get("id")
 
+        # Validate essential fields
         if not checkout_id:
-            logger.error(f"Webhook missing checkout_id in data.id")
+            logger.error(f"Missing checkout_id in data.id")
             logger.error(f"Payload: {json.dumps(payload, indent=2)}")
             log_webhook_event(
                 db, "unknown", event_type or "unknown", "failed",
@@ -93,18 +94,41 @@ async def yoco_webhook(request: Request, db: Session = Depends(get_db)):
             )
             return {"status": "received", "error": "missing checkout_id"}
 
-        logger.info(f"Event type: {event_type}")
-        logger.info(f"Checkout ID: {checkout_id}")
+        if not event_type:
+            logger.error(f"Missing event type")
+            log_webhook_event(
+                db, checkout_id, "unknown", "failed",
+                error_message="missing event_type",
+                raw_payload=json.dumps(payload)
+            )
+            return {"status": "received", "error": "missing event_type"}
 
-        # Route based on event type
+        logger.info(f"Event: {event_type}")
+        logger.info(f"Checkout: {checkout_id}")
+
+        # IDEMPOTENCY CHECK: Has this webhook been processed before?
+        existing_event = db.query(WebhookEvent).filter(
+            WebhookEvent.checkout_id == checkout_id,
+            WebhookEvent.event_type == event_type,
+            WebhookEvent.status.in_(["success", "duplicate"])
+        ).first()
+
+        if existing_event:
+            logger.info(f"✅ Webhook already processed (idempotent)")
+            logger.info(f"   Original event at: {existing_event.received_at}")
+            if existing_event.order_number:
+                logger.info(f"   Order #{existing_event.order_number}")
+            return {"status": "received", "message": "already processed", "idempotent": True}
+
+        # Route to handler
         if event_type == "payment.succeeded":
             return await handle_payment_success(payload, checkout_id, db)
         elif event_type == "payment.failed":
             return await handle_payment_failed(payload, checkout_id, db)
         else:
             logger.info(f"Unknown event type: {event_type}, logging only")
-            log_webhook_event(db, checkout_id, event_type or "unknown", "ignored", raw_payload=json.dumps(payload))
-            return {"status": "received", "message": "Event type not handled"}
+            log_webhook_event(db, checkout_id, event_type, "ignored", raw_payload=json.dumps(payload))
+            return {"status": "received", "message": "event type not handled"}
 
     except Exception as e:
         logger.error(f"CRITICAL: Webhook processing error: {str(e)}", exc_info=True)
@@ -113,20 +137,19 @@ async def yoco_webhook(request: Request, db: Session = Depends(get_db)):
 
 async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
     """
-    Handle successful payment - DETERMINISTIC matching by checkout_id only
+    Handle successful payment - PRODUCTION-SAFE
 
-    CRITICAL FLOW:
-    1. Extract data from Yoco structure (data.totalAmount, data.metadata)
-    2. Match order by checkout_id (ONLY - no fallbacks)
-    3. If exists → update to paid (idempotent)
-    4. If missing → create new order
-    5. Trigger emails (non-blocking)
-    6. Return 200 OK
+    GUARANTEES:
+    1. Never creates duplicate orders (checkout_id uniqueness)
+    2. Updates existing pending orders to paid
+    3. Creates new order if none exists
+    4. Emails sent asynchronously (non-blocking)
+    5. Always commits before returning
     """
     try:
-        # Extract from actual Yoco structure
+        # Extract from observed Yoco structure
         data = payload.get("data", {})
-        amount = data.get("totalAmount")  # Note: Yoco uses "totalAmount" not "amount"
+        amount = data.get("totalAmount")
         currency = data.get("currency", "ZAR")
         metadata = data.get("metadata", {})
 
@@ -140,10 +163,15 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
         delivery_fee_str = metadata.get("delivery_fee", "0")
         items_str = metadata.get("items", "[]")
 
-        # Validate essential data
+        # Validate critical data
         if not amount:
-            logger.error(f"Payment success: missing amount")
+            logger.error(f"Missing amount in payload")
             logger.error(f"Payload: {json.dumps(payload, indent=2)}")
+            log_webhook_event(
+                db, checkout_id, "payment.succeeded", "failed",
+                error_message="missing amount",
+                raw_payload=json.dumps(payload)
+            )
             return {"status": "received", "error": "missing amount"}
 
         try:
@@ -156,11 +184,11 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
         logger.info(f"   Amount: {amount} {currency}")
         logger.info(f"   Customer: {customer_name} ({customer_email})")
 
-        # IDEMPOTENCY: Match by checkout_id ONLY (deterministic)
+        # CRITICAL: Check if order exists by checkout_id (deterministic key)
         existing_order = db.query(Order).filter(Order.checkout_id == checkout_id).first()
 
         if existing_order:
-            # Order already exists - update status if needed
+            # Order exists - update if needed (idempotent)
             if existing_order.status != "paid":
                 existing_order.status = "paid"
                 existing_order.paid_at = datetime.utcnow()
@@ -175,9 +203,9 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
                 order_number=existing_order.order_number,
                 raw_payload=json.dumps(payload)
             )
-            return {"status": "received", "order_number": existing_order.order_number}
+            return {"status": "received", "order_number": existing_order.order_number, "idempotent": True}
 
-        # NO EXISTING ORDER — CREATE NEW ONE
+        # NO EXISTING ORDER - CREATE NEW ONE
         logger.info(f"   Creating new order...")
         ensure_sequence_exists(db)
 
@@ -202,6 +230,7 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
         order_number = get_next_order_number(db)
         new_order.order_number = order_number
 
+        # CRITICAL: Commit before logging success
         db.commit()
         logger.info(f"✅ Created order #{order_number}")
 
@@ -212,7 +241,7 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
             raw_payload=json.dumps(payload)
         )
 
-        # Send emails (non-blocking)
+        # Send emails asynchronously (failures don't block order)
         if customer_email:
             order_data = {
                 "order_number": order_number,
@@ -240,11 +269,11 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
                 daemon=True
             ).start()
 
-        return {"status": "received", "order_number": order_number}
+        return {"status": "received", "order_number": order_number, "created": True}
 
     except Exception as e:
-        logger.error(f"ERROR in payment success handler: {str(e)}", exc_info=True)
-        logger.error(f"Full payload: {json.dumps(payload, indent=2)}")
+        logger.error(f"ERROR in payment handler: {str(e)}", exc_info=True)
+        logger.error(f"Payload: {json.dumps(payload, indent=2)}")
 
         log_webhook_event(
             db, checkout_id, "payment.succeeded", "failed",
@@ -252,6 +281,7 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
             raw_payload=json.dumps(payload)
         )
 
+        # Always return 200 (Yoco requirement for retry)
         return {"status": "received", "error": "processing error logged"}
 
 
