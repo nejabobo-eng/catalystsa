@@ -82,14 +82,22 @@ async def yoco_webhook(request: Request, db: Session = Depends(get_db)):
         logger.info("=" * 60)
         logger.info(f"FULL PAYLOAD: {json.dumps(payload, indent=2)}")
 
-        # Extract from observed Yoco structure
+        # Extract from Yoco structure (supports both test and production formats)
         event_type = payload.get("type")
-        data = payload.get("data", {})
-        checkout_id = data.get("id")
+
+        # Try production format first: payload.metadata.checkoutId
+        data = payload.get("payload", {})
+        metadata = data.get("metadata", {})
+        checkout_id = metadata.get("checkoutId")
+
+        # Fallback to test format: data.id
+        if not checkout_id:
+            data = payload.get("data", {})
+            checkout_id = data.get("id")
 
         # Validate essential fields
         if not checkout_id:
-            logger.error(f"Missing checkout_id in data.id")
+            logger.error(f"Missing checkout_id in both payload.metadata.checkoutId and data.id")
             logger.error(f"Payload: {json.dumps(payload, indent=2)}")
             log_webhook_event(
                 db, "unknown", event_type or "unknown", "failed",
@@ -145,9 +153,15 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
     - System simplicity > perfect deduplication
     """
     try:
-        # Extract from observed Yoco structure
-        data = payload.get("data", {})
-        amount = data.get("totalAmount")
+        # Extract from Yoco structure (supports both test and production formats)
+        # Production format: payload.amount, payload.metadata
+        # Test format: data.totalAmount, data.metadata
+
+        data = payload.get("payload", {})
+        if not data:
+            data = payload.get("data", {})
+
+        amount = data.get("totalAmount") or data.get("amount")
         currency = data.get("currency", "ZAR")
         metadata = data.get("metadata", {})
 
