@@ -44,10 +44,7 @@ class Order(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     paid_at = Column(DateTime, nullable=True)
 
-    # Side-effect idempotency tracking (Stripe-grade)
-    customer_email_sent = Column(Boolean, default=False)  # Customer confirmation sent
-    admin_email_sent = Column(Boolean, default=False)  # Admin notification sent
-    webhook_logged = Column(Boolean, default=False)  # Audit event created
+
 
 
 

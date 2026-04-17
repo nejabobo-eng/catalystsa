@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from catalystsa.database import SessionLocal
 from catalystsa.models import Order, WebhookEvent
 from catalystsa.order_sequence import get_next_order_number, ensure_sequence_exists
@@ -7,7 +8,6 @@ from catalystsa.email_service import send_customer_order_confirmation, send_admi
 from datetime import datetime
 import json
 import logging
-import threading
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -28,8 +28,8 @@ def log_webhook_event(db: Session, checkout_id: str, event_type: str, status: st
                       error_message: str = None, order_created: bool = False, 
                       order_number: int = None, raw_payload: str = None):
     """
-    Log webhook event for transaction safety and debugging
-    This is your money flow audit trail
+    Audit log for webhook events (debugging and reconciliation only)
+    Never read for business logic - Order table is source of truth
     """
     try:
         event = WebhookEvent(
@@ -46,117 +46,6 @@ def log_webhook_event(db: Session, checkout_id: str, event_type: str, status: st
         db.commit()
     except Exception as e:
         logger.error(f"Failed to log webhook event: {str(e)}")
-
-
-def execute_side_effects(order: Order, payload: dict, db: Session):
-    """
-    Execute side effects with idempotency guarantees (STRIPE-GRADE)
-
-    PATTERN:
-    - Check flag before executing
-    - Execute side effect
-    - Set flag + atomic commit
-    - Never duplicate, never skip
-
-    GUARANTEES:
-    1. Each side effect happens exactly once
-    2. Retry-safe (webhook retries execute missing effects)
-    3. Crash-safe (partial completion recovers on retry)
-    4. Atomic (each effect has its own transaction)
-    """
-    checkout_id = order.checkout_id
-    order_number = order.order_number
-
-    # Extract data for emails (defensive - order might not have all fields)
-    data = payload.get("data", {})
-    metadata = data.get("metadata", {})
-
-    delivery_fee_str = metadata.get("delivery_fee", "0")
-    try:
-        delivery_fee_cents = int(float(delivery_fee_str) * 100)
-    except (ValueError, TypeError):
-        delivery_fee_cents = 0
-
-    # SIDE EFFECT 1: Webhook audit log
-    if not order.webhook_logged:
-        logger.info(f"   📝 Logging webhook event for order #{order_number}")
-        try:
-            log_webhook_event(
-                db, checkout_id, "payment.succeeded", "success",
-                order_created=True,
-                order_number=order_number,
-                raw_payload=json.dumps(payload)
-            )
-            order.webhook_logged = True
-            db.commit()
-            logger.info(f"   ✅ Webhook event logged")
-        except Exception as e:
-            logger.error(f"   ❌ Failed to log webhook event: {str(e)}")
-            db.rollback()
-    else:
-        logger.info(f"   ⏭️  Webhook already logged (idempotent skip)")
-
-    # SIDE EFFECT 2: Customer email
-    if order.customer_email and not order.customer_email_sent:
-        logger.info(f"   📧 Sending customer confirmation to {order.customer_email}")
-        try:
-            order_data = {
-                "order_number": order_number,
-                "checkout_id": checkout_id,
-                "amount": order.amount,
-                "delivery_fee": delivery_fee_cents,
-                "customer_name": order.customer_name,
-                "customer_email": order.customer_email,
-                "phone": order.phone,
-                "address": order.address,
-                "city": order.city,
-                "postal_code": order.postal_code,
-                "items": order.items
-            }
-
-            # Send synchronously to ensure flag accuracy
-            send_customer_order_confirmation(order_data)
-
-            order.customer_email_sent = True
-            db.commit()
-            logger.info(f"   ✅ Customer email sent")
-        except Exception as e:
-            logger.error(f"   ❌ Failed to send customer email: {str(e)}")
-            db.rollback()
-    elif order.customer_email_sent:
-        logger.info(f"   ⏭️  Customer email already sent (idempotent skip)")
-    else:
-        logger.info(f"   ⏭️  No customer email address")
-
-    # SIDE EFFECT 3: Admin email
-    if not order.admin_email_sent:
-        logger.info(f"   📧 Sending admin notification")
-        try:
-            order_data = {
-                "order_number": order_number,
-                "checkout_id": checkout_id,
-                "amount": order.amount,
-                "delivery_fee": delivery_fee_cents,
-                "customer_name": order.customer_name,
-                "customer_email": order.customer_email,
-                "phone": order.phone,
-                "address": order.address,
-                "city": order.city,
-                "postal_code": order.postal_code,
-                "items": order.items
-            }
-
-            # Send synchronously to ensure flag accuracy
-            send_admin_order_notification(order_data)
-
-            order.admin_email_sent = True
-            db.commit()
-            logger.info(f"   ✅ Admin email sent")
-        except Exception as e:
-            logger.error(f"   ❌ Failed to send admin email: {str(e)}")
-            db.rollback()
-    else:
-        logger.info(f"   ⏭️  Admin email already sent (idempotent skip)")
 
 
 @router.post("/webhook")
@@ -238,20 +127,22 @@ async def yoco_webhook(request: Request, db: Session = Depends(get_db)):
 
 async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
     """
-    Handle successful payment - DATABASE-ENFORCED IDEMPOTENCY
+    Handle successful payment - CLEAN STRIPE-STYLE ARCHITECTURE
 
-    IDEMPOTENCY MODEL (Stripe-grade):
+    IDEMPOTENCY MODEL:
     - checkout_id has UNIQUE constraint in database
     - Attempt insert → if duplicate, DB raises IntegrityError
-    - Catch IntegrityError → webhook retry, return success
-    - No manual existence checking needed
+    - On retry: order already exists, mark paid again (idempotent)
 
     GUARANTEES:
-    1. Mathematically idempotent (DB constraint, not code logic)
-    2. Concurrency-safe (database handles race conditions)
-    3. Side effects sent exactly once (tracking flags + atomic commits)
-    4. Transaction-safe (commit or rollback, no partial state)
-    5. Retry-safe (missing side effects executed on webhook retry)
+    - One order per checkout_id (database theorem)
+    - Order status always reflects payment state
+    - Side effects are best-effort (may duplicate on rare webhook retries)
+
+    TRADE-OFFS ACCEPTED:
+    - Email may duplicate on webhook retry (rare, acceptable)
+    - Audit logs may duplicate (debugging only, acceptable)
+    - System simplicity > perfect deduplication
     """
     try:
         # Extract from observed Yoco structure
@@ -291,12 +182,42 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
         logger.info(f"   Amount: {amount} {currency}")
         logger.info(f"   Customer: {customer_name} ({customer_email})")
 
-        # CREATE ORDER - Database enforces idempotency via UNIQUE constraint
-        logger.info(f"   Creating order...")
+        # Check if order already exists (webhook retry)
+        existing_order = db.query(Order).filter(Order.checkout_id == checkout_id).first()
+
+        if existing_order:
+            # Webhook retry - order already exists
+            logger.info(f"   ✅ Order #{existing_order.order_number} already exists (webhook retry)")
+
+            # Ensure status is paid (idempotent)
+            if existing_order.status != "paid":
+                existing_order.status = "paid"
+                existing_order.paid_at = datetime.utcnow()
+                db.commit()
+                logger.info(f"   Updated order status to paid")
+
+            # Audit log (best effort)
+            try:
+                log_webhook_event(
+                    db, checkout_id, "payment.succeeded", "duplicate",
+                    order_created=False,
+                    order_number=existing_order.order_number,
+                    raw_payload=json.dumps(payload)
+                )
+            except Exception as e:
+                logger.error(f"Failed to log webhook event: {str(e)}")
+
+            # Side effects (best effort - may duplicate on retries)
+            send_emails_best_effort(existing_order, delivery_fee_cents)
+
+            return {"status": "received", "order_number": existing_order.order_number, "idempotent": True}
+
+        # CREATE NEW ORDER - Database enforces uniqueness
+        logger.info(f"   Creating new order...")
         ensure_sequence_exists(db)
 
         new_order = Order(
-            checkout_id=checkout_id,  # UNIQUE constraint - DB will reject duplicates
+            checkout_id=checkout_id,  # UNIQUE constraint - DB rejects duplicates
             amount=amount,
             currency=currency,
             status="paid",
@@ -316,30 +237,39 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
         order_number = get_next_order_number(db)
         new_order.order_number = order_number
 
-        # CRITICAL: Commit (DB constraint enforced here)
+        # Commit order (atomicity: success or rollback)
         try:
             db.commit()
             logger.info(f"✅ Created order #{order_number}")
+        except IntegrityError as e:
+            # Race condition: another process created order with same checkout_id
+            # This is extremely rare but database handles it correctly
+            db.rollback()
+            logger.warning(f"IntegrityError during commit (rare race condition): {str(e)}")
+
+            # Retrieve the order that won the race
+            existing_order = db.query(Order).filter(Order.checkout_id == checkout_id).first()
+            if existing_order:
+                logger.info(f"   Order #{existing_order.order_number} created by concurrent request")
+                send_emails_best_effort(existing_order, delivery_fee_cents)
+                return {"status": "received", "order_number": existing_order.order_number, "race_handled": True}
+            else:
+                # Should never happen - re-raise for investigation
+                raise
+
+        # Audit log (best effort)
+        try:
+            log_webhook_event(
+                db, checkout_id, "payment.succeeded", "success",
+                order_created=True,
+                order_number=order_number,
+                raw_payload=json.dumps(payload)
+            )
         except Exception as e:
-            # Check if this is a duplicate checkout_id (webhook retry)
-            if "unique constraint" in str(e).lower() or "duplicate" in str(e).lower():
-                db.rollback()
-                # This is a webhook retry - order already exists
-                existing_order = db.query(Order).filter(Order.checkout_id == checkout_id).first()
-                if existing_order:
-                    logger.info(f"   ✅ Order #{existing_order.order_number} already exists (webhook retry - DB enforced idempotency)")
-                    logger.info(f"   🔄 Checking for missing side effects...")
+            logger.error(f"Failed to log webhook event: {str(e)}")
 
-                    # Execute missing side effects (retry-safe)
-                    execute_side_effects(existing_order, payload, db)
-
-                    return {"status": "received", "order_number": existing_order.order_number, "idempotent": True}
-            # Not a duplicate error - re-raise
-            raise
-
-        # Order created successfully - execute side effects with idempotency
-        logger.info(f"   🔄 Executing side effects...")
-        execute_side_effects(new_order, payload, db)
+        # Side effects (best effort)
+        send_emails_best_effort(new_order, delivery_fee_cents)
 
         return {"status": "received", "order_number": order_number, "created": True}
 
@@ -348,15 +278,66 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
         logger.error(f"Payload: {json.dumps(payload, indent=2)}")
         db.rollback()
 
-        # Log audit event (best effort)
-        log_webhook_event(
-            db, checkout_id, "payment.succeeded", "failed",
-            error_message=str(e),
-            raw_payload=json.dumps(payload)
-        )
+        # Audit log (best effort)
+        try:
+            log_webhook_event(
+                db, checkout_id, "payment.succeeded", "failed",
+                error_message=str(e),
+                raw_payload=json.dumps(payload)
+            )
+        except:
+            pass
 
-        # Always return 200 (Yoco requirement for retry)
+        # Always return 200 OK (Yoco requirement for retry)
         return {"status": "received", "error": "processing error logged"}
+
+
+def send_emails_best_effort(order: Order, delivery_fee_cents: int):
+    """
+    Send emails - best effort, failures are logged but don't block webhook response
+
+    TRADE-OFF: May send duplicate emails on webhook retries (rare, acceptable)
+    """
+    # Customer email
+    if order.customer_email:
+        try:
+            order_data = {
+                "order_number": order.order_number,
+                "checkout_id": order.checkout_id,
+                "amount": order.amount,
+                "delivery_fee": delivery_fee_cents,
+                "customer_name": order.customer_name,
+                "customer_email": order.customer_email,
+                "phone": order.phone,
+                "address": order.address,
+                "city": order.city,
+                "postal_code": order.postal_code,
+                "items": order.items
+            }
+            send_customer_order_confirmation(order_data)
+            logger.info(f"   ✅ Customer email sent to {order.customer_email}")
+        except Exception as e:
+            logger.error(f"   ❌ Failed to send customer email: {str(e)}")
+
+    # Admin email
+    try:
+        order_data = {
+            "order_number": order.order_number,
+            "checkout_id": order.checkout_id,
+            "amount": order.amount,
+            "delivery_fee": delivery_fee_cents,
+            "customer_name": order.customer_name,
+            "customer_email": order.customer_email,
+            "phone": order.phone,
+            "address": order.address,
+            "city": order.city,
+            "postal_code": order.postal_code,
+            "items": order.items
+        }
+        send_admin_order_notification(order_data)
+        logger.info(f"   ✅ Admin email sent")
+    except Exception as e:
+        logger.error(f"   ❌ Failed to send admin email: {str(e)}")
 
 
 async def handle_payment_failed(payload: dict, checkout_id: str, db: Session):
