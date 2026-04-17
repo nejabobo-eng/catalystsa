@@ -53,13 +53,15 @@ async def yoco_webhook(request: Request, db: Session = Depends(get_db)):
     """
     Yoco webhook handler — TRANSACTION SAFETY CRITICAL
 
-    Yoco Checkout API sends flat structure:
+    Yoco actually sends (confirmed from logs):
     {
-      "id": "ch_xxx",
-      "status": "successful" | "failed",
-      "amount": 27500,
-      "currency": "ZAR",
-      "metadata": { customer_email, customer_name, ... }
+      "type": "payment.succeeded" | "payment.failed",
+      "data": {
+        "id": "ch_xxx",
+        "totalAmount": 27500,
+        "currency": "ZAR",
+        "metadata": { customer_email, customer_name, ... }
+      }
     }
 
     RULES:
@@ -76,32 +78,33 @@ async def yoco_webhook(request: Request, db: Session = Depends(get_db)):
         logger.info("=" * 60)
         logger.info(f"FULL PAYLOAD: {json.dumps(payload, indent=2)}")
 
-        # Extract checkout_id (Yoco Checkout API uses flat "id" field)
-        checkout_id = payload.get("id")
-        status = payload.get("status")
+        # Extract from actual Yoco structure (confirmed from webhook logs)
+        event_type = payload.get("type")
+        data = payload.get("data", {})
+        checkout_id = data.get("id")
 
         if not checkout_id:
-            logger.error(f"Webhook missing checkout_id (id field)")
+            logger.error(f"Webhook missing checkout_id in data.id")
             logger.error(f"Payload: {json.dumps(payload, indent=2)}")
             log_webhook_event(
-                db, "unknown", status or "unknown", "failed",
+                db, "unknown", event_type or "unknown", "failed",
                 error_message="missing checkout_id",
                 raw_payload=json.dumps(payload)
             )
             return {"status": "received", "error": "missing checkout_id"}
 
+        logger.info(f"Event type: {event_type}")
         logger.info(f"Checkout ID: {checkout_id}")
-        logger.info(f"Status: {status}")
 
-        # Route based on status
-        if status == "successful":
+        # Route based on event type
+        if event_type == "payment.succeeded":
             return await handle_payment_success(payload, checkout_id, db)
-        elif status == "failed":
+        elif event_type == "payment.failed":
             return await handle_payment_failed(payload, checkout_id, db)
         else:
-            logger.info(f"Unknown status: {status}, logging only")
-            log_webhook_event(db, checkout_id, status or "unknown", "ignored", raw_payload=json.dumps(payload))
-            return {"status": "received", "message": "Status not handled"}
+            logger.info(f"Unknown event type: {event_type}, logging only")
+            log_webhook_event(db, checkout_id, event_type or "unknown", "ignored", raw_payload=json.dumps(payload))
+            return {"status": "received", "message": "Event type not handled"}
 
     except Exception as e:
         logger.error(f"CRITICAL: Webhook processing error: {str(e)}", exc_info=True)
@@ -113,7 +116,7 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
     Handle successful payment - DETERMINISTIC matching by checkout_id only
 
     CRITICAL FLOW:
-    1. Extract data from Yoco flat structure
+    1. Extract data from Yoco structure (data.totalAmount, data.metadata)
     2. Match order by checkout_id (ONLY - no fallbacks)
     3. If exists → update to paid (idempotent)
     4. If missing → create new order
@@ -121,10 +124,11 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
     6. Return 200 OK
     """
     try:
-        # Extract from Yoco Checkout API flat structure
-        amount = payload.get("amount")
-        currency = payload.get("currency", "ZAR")
-        metadata = payload.get("metadata", {})
+        # Extract from actual Yoco structure
+        data = payload.get("data", {})
+        amount = data.get("totalAmount")  # Note: Yoco uses "totalAmount" not "amount"
+        currency = data.get("currency", "ZAR")
+        metadata = data.get("metadata", {})
 
         # Extract customer data
         customer_email = metadata.get("customer_email", "").strip().lower()
@@ -166,7 +170,7 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
                 logger.info(f"   ✅ Order #{existing_order.order_number} already paid (idempotent)")
 
             log_webhook_event(
-                db, checkout_id, "successful", "duplicate",
+                db, checkout_id, "payment.succeeded", "duplicate",
                 order_created=False,
                 order_number=existing_order.order_number,
                 raw_payload=json.dumps(payload)
@@ -202,7 +206,7 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
         logger.info(f"✅ Created order #{order_number}")
 
         log_webhook_event(
-            db, checkout_id, "successful", "success",
+            db, checkout_id, "payment.succeeded", "success",
             order_created=True,
             order_number=order_number,
             raw_payload=json.dumps(payload)
@@ -243,7 +247,7 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
         logger.error(f"Full payload: {json.dumps(payload, indent=2)}")
 
         log_webhook_event(
-            db, checkout_id, "successful", "failed",
+            db, checkout_id, "payment.succeeded", "failed",
             error_message=str(e),
             raw_payload=json.dumps(payload)
         )
