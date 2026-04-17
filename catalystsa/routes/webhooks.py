@@ -51,7 +51,7 @@ def log_webhook_event(db: Session, checkout_id: str, event_type: str, status: st
 @router.post("/webhook")
 async def yoco_webhook(request: Request, db: Session = Depends(get_db)):
     """
-    Yoco webhook handler — PRODUCTION-SAFE
+    Yoco webhook handler — STRIPE-LEVEL ARCHITECTURE
 
     Contract (observed from real webhooks):
     {
@@ -64,11 +64,15 @@ async def yoco_webhook(request: Request, db: Session = Depends(get_db)):
       }
     }
 
+    ARCHITECTURE:
+    - Order table = single source of truth (idempotency)
+    - WebhookEvent table = audit log only (never read for logic)
+    - checkout_id = deterministic key
+
     GUARANTEES:
     1. Idempotent - safe for Yoco retries
-    2. Deterministic - checkout_id is single source of truth
-    3. Never creates duplicate orders
-    4. Always returns 200 OK (Yoco requirement)
+    2. Never creates duplicate orders
+    3. Always returns 200 OK (Yoco requirement)
     """
     try:
         payload = await request.json()
@@ -106,20 +110,6 @@ async def yoco_webhook(request: Request, db: Session = Depends(get_db)):
         logger.info(f"Event: {event_type}")
         logger.info(f"Checkout: {checkout_id}")
 
-        # IDEMPOTENCY CHECK: Has this webhook been processed before?
-        existing_event = db.query(WebhookEvent).filter(
-            WebhookEvent.checkout_id == checkout_id,
-            WebhookEvent.event_type == event_type,
-            WebhookEvent.status.in_(["success", "duplicate"])
-        ).first()
-
-        if existing_event:
-            logger.info(f"✅ Webhook already processed (idempotent)")
-            logger.info(f"   Original event at: {existing_event.received_at}")
-            if existing_event.order_number:
-                logger.info(f"   Order #{existing_event.order_number}")
-            return {"status": "received", "message": "already processed", "idempotent": True}
-
         # Route to handler
         if event_type == "payment.succeeded":
             return await handle_payment_success(payload, checkout_id, db)
@@ -137,14 +127,18 @@ async def yoco_webhook(request: Request, db: Session = Depends(get_db)):
 
 async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
     """
-    Handle successful payment - PRODUCTION-SAFE
+    Handle successful payment - STRIPE-LEVEL ARCHITECTURE
+
+    IDEMPOTENCY MODEL:
+    - Order.checkout_id = single source of truth
+    - If order exists with status="paid" → already processed, return early
+    - WebhookEvent = audit log only (inserted after order commit)
 
     GUARANTEES:
-    1. Never creates duplicate orders (checkout_id uniqueness)
-    2. Updates existing pending orders to paid
-    3. Creates new order if none exists
-    4. Emails sent asynchronously (non-blocking)
-    5. Always commits before returning
+    1. Never creates duplicate orders (DB constraint on checkout_id)
+    2. Safe for webhook retries (Order table idempotency)
+    3. Emails sent only once (order creation = trigger)
+    4. Transaction-safe (order committed before webhook logged)
     """
     try:
         # Extract from observed Yoco structure
@@ -184,26 +178,35 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
         logger.info(f"   Amount: {amount} {currency}")
         logger.info(f"   Customer: {customer_name} ({customer_email})")
 
-        # CRITICAL: Check if order exists by checkout_id (deterministic key)
+        # IDEMPOTENCY: Order table is single source of truth
         existing_order = db.query(Order).filter(Order.checkout_id == checkout_id).first()
 
         if existing_order:
-            # Order exists - update if needed (idempotent)
-            if existing_order.status != "paid":
+            # Order exists - check if already paid (idempotency key)
+            if existing_order.status == "paid":
+                logger.info(f"   ✅ Order #{existing_order.order_number} already paid (idempotent - webhook retry)")
+                # Log audit event (not used for control logic)
+                log_webhook_event(
+                    db, checkout_id, "payment.succeeded", "duplicate",
+                    order_created=False,
+                    order_number=existing_order.order_number,
+                    raw_payload=json.dumps(payload)
+                )
+                return {"status": "received", "order_number": existing_order.order_number, "idempotent": True}
+            else:
+                # Order exists but not paid - update status
                 existing_order.status = "paid"
                 existing_order.paid_at = datetime.utcnow()
                 db.commit()
                 logger.info(f"   ✅ Updated order #{existing_order.order_number} to paid")
-            else:
-                logger.info(f"   ✅ Order #{existing_order.order_number} already paid (idempotent)")
-
-            log_webhook_event(
-                db, checkout_id, "payment.succeeded", "duplicate",
-                order_created=False,
-                order_number=existing_order.order_number,
-                raw_payload=json.dumps(payload)
-            )
-            return {"status": "received", "order_number": existing_order.order_number, "idempotent": True}
+                # Log audit event
+                log_webhook_event(
+                    db, checkout_id, "payment.succeeded", "updated",
+                    order_created=False,
+                    order_number=existing_order.order_number,
+                    raw_payload=json.dumps(payload)
+                )
+                return {"status": "received", "order_number": existing_order.order_number, "updated": True}
 
         # NO EXISTING ORDER - CREATE NEW ONE
         logger.info(f"   Creating new order...")
@@ -230,10 +233,11 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
         order_number = get_next_order_number(db)
         new_order.order_number = order_number
 
-        # CRITICAL: Commit before logging success
+        # CRITICAL: Commit order FIRST (source of truth)
         db.commit()
         logger.info(f"✅ Created order #{order_number}")
 
+        # THEN log audit event (failures here don't affect order)
         log_webhook_event(
             db, checkout_id, "payment.succeeded", "success",
             order_created=True,
@@ -241,7 +245,7 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
             raw_payload=json.dumps(payload)
         )
 
-        # Send emails asynchronously (failures don't block order)
+        # Send emails asynchronously (order already committed)
         if customer_email:
             order_data = {
                 "order_number": order_number,
@@ -275,6 +279,7 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
         logger.error(f"ERROR in payment handler: {str(e)}", exc_info=True)
         logger.error(f"Payload: {json.dumps(payload, indent=2)}")
 
+        # Log audit event (best effort)
         log_webhook_event(
             db, checkout_id, "payment.succeeded", "failed",
             error_message=str(e),
