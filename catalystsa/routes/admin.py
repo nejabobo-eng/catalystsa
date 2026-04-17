@@ -35,10 +35,14 @@ def verify_admin_header(authorization: str = Header(None)):
 def admin_login(payload: dict):
     """Admin login endpoint"""
     password = payload.get("password", "").strip()
-    
+
     if not password:
         raise HTTPException(status_code=400, detail="Password required")
-    
+
+    # Temporary debug logging
+    logger.info(f"Login attempt - provided length: {len(password)}, expected length: {len(ADMIN_PASSWORD)}")
+    logger.info(f"Expected password starts with: {ADMIN_PASSWORD[:3]}...")
+
     if not _verify_password(password, ADMIN_PASSWORD):
         logger.warning("Failed admin login attempt")
         raise HTTPException(status_code=401, detail="Invalid password")
