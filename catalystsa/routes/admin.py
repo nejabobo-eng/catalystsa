@@ -39,10 +39,6 @@ def admin_login(payload: dict):
     if not password:
         raise HTTPException(status_code=400, detail="Password required")
 
-    # Temporary debug logging
-    logger.info(f"Login attempt - provided length: {len(password)}, expected length: {len(ADMIN_PASSWORD)}")
-    logger.info(f"Expected password starts with: {ADMIN_PASSWORD[:3]}...")
-
     if not _verify_password(password, ADMIN_PASSWORD):
         logger.warning("Failed admin login attempt")
         raise HTTPException(status_code=401, detail="Invalid password")
@@ -67,10 +63,10 @@ def get_orders(
 ):
     """Get all orders (paginated, newest first)"""
     query = db.query(Order).order_by(Order.created_at.desc())
-    
+
     if status_filter:
         query = query.filter(Order.status == status_filter)
-    
+
     if search:
         try:
             order_num = int(search)
@@ -80,10 +76,14 @@ def get_orders(
             )
         except ValueError:
             query = query.filter(Order.customer_email.ilike(f"%{search}%"))
-    
+
     total = query.count()
     orders = query.offset(skip).limit(limit).all()
-    
+
+    logger.info(f"Admin orders query - Total: {total}, Returned: {len(orders)}, Skip: {skip}, Limit: {limit}")
+    if orders:
+        logger.info(f"Sample order: #{orders[0].order_number}, Email: {orders[0].customer_email}")
+
     return {
         "orders": [
             {
