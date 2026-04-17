@@ -21,6 +21,39 @@ def get_db():
         db.close()
 
 
+def extract_checkout_id(payload: dict) -> str:
+    """
+    Robustly extract checkout_id from multiple possible Yoco webhook structures
+
+    Yoco may send different structures:
+    - {"data": {"id": "ch_xxx"}}
+    - {"id": "ch_xxx"}
+    - {"checkout_id": "ch_xxx"}
+    - {"payload": {"id": "ch_xxx"}}
+    """
+    # Try direct checkout_id field
+    if "checkout_id" in payload:
+        return payload["checkout_id"]
+
+    # Try nested data.id (original expected structure)
+    if "data" in payload and isinstance(payload["data"], dict):
+        if "id" in payload["data"]:
+            return payload["data"]["id"]
+        if "checkout_id" in payload["data"]:
+            return payload["data"]["checkout_id"]
+
+    # Try direct id field
+    if "id" in payload:
+        return payload["id"]
+
+    # Try nested payload.id
+    if "payload" in payload and isinstance(payload["payload"], dict):
+        if "id" in payload["payload"]:
+            return payload["payload"]["id"]
+
+    return None
+
+
 def log_webhook_event(db: Session, checkout_id: str, event_type: str, status: str, 
                       error_message: str = None, order_created: bool = False, 
                       order_number: int = None, raw_payload: str = None):
@@ -63,12 +96,19 @@ async def yoco_webhook(request: Request, db: Session = Depends(get_db)):
         logger.info("=" * 60)
         logger.info("YOCO WEBHOOK RECEIVED")
         logger.info("=" * 60)
+        logger.info(f"FULL PAYLOAD: {json.dumps(payload, indent=2)}")
 
         event_type = payload.get("type")
-        checkout_id = payload.get("data", {}).get("id")
+        checkout_id = extract_checkout_id(payload)
 
         if not checkout_id:
-            logger.error("Webhook missing checkout_id — cannot process")
+            logger.error(f"Webhook missing checkout_id — cannot process")
+            logger.error(f"Payload structure: {json.dumps(payload, indent=2)}")
+            log_webhook_event(
+                db, "unknown", event_type or "unknown", "failed",
+                error_message="missing checkout_id",
+                raw_payload=json.dumps(payload)
+            )
             return {"status": "received", "error": "missing checkout_id"}
 
         logger.info(f"Event type: {event_type}, Checkout: {checkout_id}")
