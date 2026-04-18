@@ -9,7 +9,8 @@ app = FastAPI()
 origins = [
     "http://localhost:3000",
     "https://catalystsa-frontend.vercel.app",
-    "https://*.vercel.app",  # Allow all Vercel preview deployments
+    "https://catalystsa-admin-fyd5.vercel.app",  # Admin panel
+    "https://catalystsa-admin-fyd5-git-main-nejabobo-engs-projects.vercel.app",  # Admin git preview
 ]
 
 app.add_middleware(
@@ -18,6 +19,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 Base.metadata.create_all(bind=engine)
