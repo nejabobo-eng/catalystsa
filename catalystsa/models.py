@@ -4,16 +4,26 @@ from catalystsa.database import Base
 
 
 class Product(Base):
+    """
+    Product catalog - simple MVP structure
+
+    Design principles:
+    - Price stored in cents (consistent with Order model)
+    - Stock tracking for inventory management
+    - Active flag for soft delete (preserve order history)
+    - No variants/categories for MVP simplicity
+    """
     __tablename__ = "products"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String)
-    description = Column(String)
-    cost = Column(Float)
-    price = Column(Float)
-    category = Column(String)
-    image = Column(String)
-    in_stock = Column(Boolean, default=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    price = Column(Integer, nullable=False)  # in cents (e.g., 25000 = R250.00)
+    image_url = Column(String, nullable=True)
+    stock = Column(Integer, default=0)
+    active = Column(Boolean, default=True)  # soft delete - preserve order references
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class OrderSequence(Base):
