@@ -92,7 +92,7 @@ def get_orders(
                 "customer_name": order.customer_name or "N/A",
                 "email": order.customer_email or "N/A",
                 "status": order.status,
-                "total": (order.amount + (order.delivery_fee or 0)) / 100,
+                "total": ((order.amount or 0) + (order.delivery_fee or 0)) / 100,
                 "created_at": order.created_at.isoformat() if order.created_at else None,
             }
             for order in orders
@@ -128,7 +128,7 @@ def get_order_detail(
         "items": order.items or "[]",
         "subtotal": (order.amount / 100) if order.amount else 0,
         "delivery_fee": (order.delivery_fee / 100) if order.delivery_fee else 0,
-        "total": ((order.amount + (order.delivery_fee or 0)) / 100),
+        "total": ((order.amount or 0) + (order.delivery_fee or 0)) / 100,
         "currency": order.currency or "ZAR",
         "created_at": order.created_at.isoformat() if order.created_at else None,
         "paid_at": order.paid_at.isoformat() if order.paid_at else None,
