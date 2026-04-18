@@ -5,10 +5,15 @@ from catalystsa.database import Base
 
 class Product(Base):
     """
-    Product catalog - simple MVP structure
+    Product catalog - MVP with automatic markup pricing
+
+    Business logic:
+    - Admin enters cost_price (what you paid)
+    - System calculates price = cost_price * 1.6 (rounded to nearest R10)
+    - Customer sees only the final selling price
 
     Design principles:
-    - Price stored in cents (consistent with Order model)
+    - Both prices stored in cents (consistent with Order model)
     - Stock tracking for inventory management
     - Active flag for soft delete (preserve order history)
     - No variants/categories for MVP simplicity
@@ -18,7 +23,8 @@ class Product(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
-    price = Column(Integer, nullable=False)  # in cents (e.g., 25000 = R250.00)
+    cost_price = Column(Integer, nullable=False)  # in cents - what admin paid
+    price = Column(Integer, nullable=False)  # in cents - selling price (cost * 1.6)
     image_url = Column(String, nullable=True)
     stock = Column(Integer, default=0)
     active = Column(Boolean, default=True)  # soft delete - preserve order references

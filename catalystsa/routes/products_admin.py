@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from catalystsa.database import SessionLocal
 from catalystsa.models import Product
-from catalystsa.admin_auth import verify_admin_header
+from catalystsa.admin_auth import verify_token
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
@@ -18,11 +18,49 @@ def get_db():
         db.close()
 
 
+def verify_admin_dependency(authorization: str = Header(None)):
+    """
+    Admin authentication dependency
+    Verifies JWT token from Authorization header
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing authorization header")
+
+    try:
+        # Extract token from "Bearer <token>"
+        parts = authorization.split()
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Invalid authorization format")
+
+        token = parts[1]
+        payload = verify_token(token)
+        return payload.get("admin_id", "admin")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Authentication failed: {str(e)}")
+
+
+def apply_markup(cost_price: int) -> int:
+    """
+    Business logic: Apply x1.6 markup and round to nearest R10
+
+    Examples:
+    - Cost R100.00 (10000 cents) → R160.00 (16000 cents)
+    - Cost R125.00 (12500 cents) → R200.00 (20000 cents)
+    - Cost R87.50 (8750 cents) → R140.00 (14000 cents)
+    """
+    marked_up = cost_price * 1.6
+    # Round to nearest 1000 cents (= R10)
+    rounded = round(marked_up / 1000) * 1000
+    return int(rounded)
+
+
 # Pydantic schemas
 class ProductCreate(BaseModel):
     name: str
     description: Optional[str] = None
-    price: int  # in cents
+    cost_price: int  # in cents - what admin paid
     image_url: Optional[str] = None
     stock: int = 0
     active: bool = True
@@ -31,7 +69,7 @@ class ProductCreate(BaseModel):
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    price: Optional[int] = None
+    cost_price: Optional[int] = None  # updating cost recalculates selling price
     image_url: Optional[str] = None
     stock: Optional[int] = None
     active: Optional[bool] = None
@@ -56,11 +94,12 @@ class ProductResponse(BaseModel):
 @router.get("/admin/products")
 def list_products_admin(
     db: Session = Depends(get_db),
-    admin_id: str = Depends(verify_admin_header),
+    admin_id: str = Depends(verify_admin_dependency),
     include_inactive: bool = False
 ):
     """
     List all products (admin view)
+    Shows both cost_price (what you paid) and selling price (with markup)
 
     Query params:
     - include_inactive: Show inactive products (default: false)
@@ -78,8 +117,11 @@ def list_products_admin(
                 "id": p.id,
                 "name": p.name,
                 "description": p.description,
+                "cost_price": p.cost_price,
+                "cost_display": f"R{p.cost_price / 100:.2f}",
                 "price": p.price,
                 "price_display": f"R{p.price / 100:.2f}",
+                "markup_percent": ((p.price - p.cost_price) / p.cost_price * 100) if p.cost_price > 0 else 0,
                 "image_url": p.image_url,
                 "stock": p.stock,
                 "active": p.active,
@@ -96,33 +138,42 @@ def list_products_admin(
 def create_product(
     product: ProductCreate,
     db: Session = Depends(get_db),
-    admin_id: str = Depends(verify_admin_header)
+    admin_id: str = Depends(verify_admin_dependency)
 ):
     """
     Create new product (admin only)
 
+    Admin enters cost_price, system auto-calculates selling price with x1.6 markup
+
     Request body:
     {
         "name": "Product Name",
-        "description": "Product description",
-        "price": 25000,  // in cents (R250.00)
+        "description": "Optional description",
+        "cost_price": 10000,  // R100.00 in cents
         "image_url": "https://example.com/image.jpg",
         "stock": 10,
         "active": true
     }
+
+    System automatically calculates:
+    - price = cost_price * 1.6, rounded to nearest R10
     """
-    # Validate price
-    if product.price < 0:
-        raise HTTPException(status_code=400, detail="Price cannot be negative")
+    # Validate cost price
+    if product.cost_price < 0:
+        raise HTTPException(status_code=400, detail="Cost price cannot be negative")
 
     if product.stock < 0:
         raise HTTPException(status_code=400, detail="Stock cannot be negative")
+
+    # Apply markup: x1.6 rounded to nearest R10
+    selling_price = apply_markup(product.cost_price)
 
     # Create product
     new_product = Product(
         name=product.name,
         description=product.description,
-        price=product.price,
+        cost_price=product.cost_price,
+        price=selling_price,  # Auto-calculated
         image_url=product.image_url,
         stock=product.stock,
         active=product.active
@@ -138,8 +189,11 @@ def create_product(
             "id": new_product.id,
             "name": new_product.name,
             "description": new_product.description,
+            "cost_price": new_product.cost_price,
+            "cost_display": f"R{new_product.cost_price / 100:.2f}",
             "price": new_product.price,
             "price_display": f"R{new_product.price / 100:.2f}",
+            "markup_applied": f"{((new_product.price - new_product.cost_price) / new_product.cost_price * 100):.1f}%",
             "image_url": new_product.image_url,
             "stock": new_product.stock,
             "active": new_product.active,
@@ -153,10 +207,12 @@ def update_product(
     product_id: int,
     product: ProductUpdate,
     db: Session = Depends(get_db),
-    admin_id: str = Depends(verify_admin_header)
+    admin_id: str = Depends(verify_admin_dependency)
 ):
     """
     Update existing product (admin only)
+
+    If cost_price is updated, selling price is automatically recalculated with x1.6 markup
     """
     existing_product = db.query(Product).filter(Product.id == product_id).first()
 
@@ -168,10 +224,12 @@ def update_product(
         existing_product.name = product.name
     if product.description is not None:
         existing_product.description = product.description
-    if product.price is not None:
-        if product.price < 0:
-            raise HTTPException(status_code=400, detail="Price cannot be negative")
-        existing_product.price = product.price
+    if product.cost_price is not None:
+        if product.cost_price < 0:
+            raise HTTPException(status_code=400, detail="Cost price cannot be negative")
+        existing_product.cost_price = product.cost_price
+        # Recalculate selling price when cost changes
+        existing_product.price = apply_markup(product.cost_price)
     if product.image_url is not None:
         existing_product.image_url = product.image_url
     if product.stock is not None:
@@ -192,8 +250,17 @@ def update_product(
             "id": existing_product.id,
             "name": existing_product.name,
             "description": existing_product.description,
+            "cost_price": existing_product.cost_price,
+            "cost_display": f"R{existing_product.cost_price / 100:.2f}",
             "price": existing_product.price,
             "price_display": f"R{existing_product.price / 100:.2f}",
+            "markup_applied": f"{((existing_product.price - existing_product.cost_price) / existing_product.cost_price * 100):.1f}%",
+            "image_url": existing_product.image_url,
+            "stock": existing_product.stock,
+            "active": existing_product.active,
+            "updated_at": existing_product.updated_at.isoformat() if existing_product.updated_at else None,
+        }
+    }
             "image_url": existing_product.image_url,
             "stock": existing_product.stock,
             "active": existing_product.active,
@@ -207,7 +274,7 @@ def delete_product(
     product_id: int,
     hard_delete: bool = False,
     db: Session = Depends(get_db),
-    admin_id: str = Depends(verify_admin_header)
+    admin_id: str = Depends(verify_admin_dependency)
 ):
     """
     Delete product (admin only)
@@ -239,7 +306,7 @@ def delete_product(
 def get_product_admin(
     product_id: int,
     db: Session = Depends(get_db),
-    admin_id: str = Depends(verify_admin_header)
+    admin_id: str = Depends(verify_admin_dependency)
 ):
     """
     Get single product details (admin view)
@@ -253,8 +320,11 @@ def get_product_admin(
         "id": product.id,
         "name": product.name,
         "description": product.description,
+        "cost_price": product.cost_price,
+        "cost_display": f"R{product.cost_price / 100:.2f}",
         "price": product.price,
         "price_display": f"R{product.price / 100:.2f}",
+        "markup_percent": f"{((product.price - product.cost_price) / product.cost_price * 100):.1f}%",
         "image_url": product.image_url,
         "stock": product.stock,
         "active": product.active,

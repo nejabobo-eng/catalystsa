@@ -55,3 +55,34 @@ def verify_token(token: str) -> dict:
         return payload
     except (ValueError, KeyError, json.JSONDecodeError):
         raise HTTPException(status_code=401, detail="Invalid token format")
+
+
+def verify_admin_header(authorization: str = None) -> str:
+    """
+    FastAPI dependency for admin routes
+    Extracts and verifies JWT token from Authorization header
+
+    Usage:
+        @router.get("/admin/endpoint")
+        def endpoint(admin_id: str = Depends(verify_admin_header)):
+            # admin_id is returned if token is valid
+    """
+    from fastapi import Header
+
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing authorization header")
+
+    try:
+        # Extract token from "Bearer <token>" format
+        parts = authorization.split()
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Invalid authorization format")
+
+        token = parts[1]
+        payload = verify_token(token)
+        return payload.get("admin_id", "admin")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Authentication failed: {str(e)}")
