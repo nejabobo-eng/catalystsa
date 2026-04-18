@@ -16,34 +16,42 @@ def create_token(admin_id: str = "admin") -> str:
         "iat": datetime.utcnow().isoformat(),
         "exp": (datetime.utcnow() + timedelta(hours=TOKEN_EXPIRY_HOURS)).isoformat()
     }
-    
+
     payload_json = json.dumps(payload, sort_keys=True)
     signature = hmac.new(
         SECRET_KEY.encode(),
         payload_json.encode(),
         hashlib.sha256
     ).hexdigest()
-    
-    return f"{payload_json}:{signature}"
+
+    # Base64 encode to make it safe for HTTP headers
+    import base64
+    token_raw = f"{payload_json}:{signature}"
+    token_b64 = base64.b64encode(token_raw.encode()).decode('ascii')
+    return token_b64
 
 
 def verify_token(token: str) -> dict:
     try:
-        payload_json, signature = token.rsplit(":", 1)
+        # Decode from base64
+        import base64
+        token_raw = base64.b64decode(token).decode('utf-8')
+
+        payload_json, signature = token_raw.rsplit(":", 1)
         expected_signature = hmac.new(
             SECRET_KEY.encode(),
             payload_json.encode(),
             hashlib.sha256
         ).hexdigest()
-        
+
         if not hmac.compare_digest(signature, expected_signature):
             raise HTTPException(status_code=401, detail="Invalid token")
-        
+
         payload = json.loads(payload_json)
         exp_time = datetime.fromisoformat(payload["exp"])
         if datetime.utcnow() > exp_time:
             raise HTTPException(status_code=401, detail="Token expired")
-        
+
         return payload
     except (ValueError, KeyError, json.JSONDecodeError):
         raise HTTPException(status_code=401, detail="Invalid token format")
