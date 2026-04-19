@@ -22,22 +22,7 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-# TEMPORARY: Reset ONLY products table for schema migration
-# TODO: REMOVE THIS AFTER ONE SUCCESSFUL DEPLOY
-@app.on_event("startup")
-def migrate_products_table():
-    """One-time migration: drop and recreate products table only"""
-    from catalystsa.models import Product
-    try:
-        # Drop only products table
-        Product.__table__.drop(engine, checkfirst=True)
-        # Recreate with new schema
-        Product.__table__.create(engine, checkfirst=True)
-        print("✅ Products table migrated successfully")
-    except Exception as e:
-        print(f"Migration note: {e}")
-
-# Create other tables if they don't exist
+# Create tables if they don't exist
 Base.metadata.create_all(bind=engine)
 
 # Product routes (admin + public)
