@@ -3,7 +3,7 @@ import hmac
 import hashlib
 import json
 from datetime import datetime, timedelta
-from fastapi import HTTPException
+from fastapi import HTTPException, Header
 
 SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "your-secret-key-change-this")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
@@ -57,7 +57,7 @@ def verify_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token format")
 
 
-def verify_admin_header(authorization: str = None) -> str:
+def verify_admin_header(authorization: str = Header(None)) -> str:
     """
     FastAPI dependency for admin routes
     Extracts and verifies JWT token from Authorization header
@@ -67,8 +67,6 @@ def verify_admin_header(authorization: str = None) -> str:
         def endpoint(admin_id: str = Depends(verify_admin_header)):
             # admin_id is returned if token is valid
     """
-    from fastapi import Header
-
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing authorization header")
 
