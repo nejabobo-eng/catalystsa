@@ -22,13 +22,23 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-# TEMPORARY: Reset database to apply new product schema with cost_price
+# TEMPORARY: Reset ONLY products table for schema migration
 # TODO: REMOVE THIS AFTER ONE SUCCESSFUL DEPLOY
 @app.on_event("startup")
-def reset_products_table():
-    """One-time reset to migrate products table schema"""
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
+def migrate_products_table():
+    """One-time migration: drop and recreate products table only"""
+    from catalystsa.models import Product
+    try:
+        # Drop only products table
+        Product.__table__.drop(engine, checkfirst=True)
+        # Recreate with new schema
+        Product.__table__.create(engine, checkfirst=True)
+        print("✅ Products table migrated successfully")
+    except Exception as e:
+        print(f"Migration note: {e}")
+
+# Create other tables if they don't exist
+Base.metadata.create_all(bind=engine)
 
 # Product routes (admin + public)
 app.include_router(products_admin.router, prefix="", tags=["Products"])
