@@ -35,4 +35,8 @@ app.include_router(admin.router, prefix="", tags=["Admin"])
 
 @app.get("/")
 def root():
-    return {"message": "CatalystSA API running"}
+    return {
+        "message": "CatalystSA API running",
+        "version": "2.0-products-admin",
+        "timestamp": "2024-01-15T12:00:00Z"
+    }
