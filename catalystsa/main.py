@@ -22,7 +22,13 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-Base.metadata.create_all(bind=engine)
+# TEMPORARY: Reset database to apply new product schema with cost_price
+# TODO: REMOVE THIS AFTER ONE SUCCESSFUL DEPLOY
+@app.on_event("startup")
+def reset_products_table():
+    """One-time reset to migrate products table schema"""
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
 # Product routes (admin + public)
 app.include_router(products_admin.router, prefix="", tags=["Products"])
