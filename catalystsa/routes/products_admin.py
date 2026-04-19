@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from catalystsa.database import SessionLocal
 from catalystsa.models import Product
-from catalystsa.admin_auth import verify_token
+from catalystsa.admin_auth import verify_admin_header  # Use existing function
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
@@ -16,29 +16,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
-
-def verify_admin_dependency(authorization: str = Header(None)):
-    """
-    Admin authentication dependency
-    Verifies JWT token from Authorization header
-    """
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing authorization header")
-
-    try:
-        # Extract token from "Bearer <token>"
-        parts = authorization.split()
-        if len(parts) != 2 or parts[0].lower() != "bearer":
-            raise HTTPException(status_code=401, detail="Invalid authorization format")
-
-        token = parts[1]
-        payload = verify_token(token)
-        return payload.get("admin_id", "admin")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Authentication failed: {str(e)}")
 
 
 def apply_markup(cost_price: int) -> int:
@@ -94,7 +71,7 @@ class ProductResponse(BaseModel):
 @router.get("/admin/products")
 def list_products_admin(
     db: Session = Depends(get_db),
-    admin_id: str = Depends(verify_admin_dependency),
+    admin_id: str = Depends(verify_admin_header),
     include_inactive: bool = False
 ):
     """
@@ -138,7 +115,7 @@ def list_products_admin(
 def create_product(
     product: ProductCreate,
     db: Session = Depends(get_db),
-    admin_id: str = Depends(verify_admin_dependency)
+    admin_id: str = Depends(verify_admin_header)
 ):
     """
     Create new product (admin only)
@@ -207,7 +184,7 @@ def update_product(
     product_id: int,
     product: ProductUpdate,
     db: Session = Depends(get_db),
-    admin_id: str = Depends(verify_admin_dependency)
+    admin_id: str = Depends(verify_admin_header)
 ):
     """
     Update existing product (admin only)
@@ -274,7 +251,7 @@ def delete_product(
     product_id: int,
     hard_delete: bool = False,
     db: Session = Depends(get_db),
-    admin_id: str = Depends(verify_admin_dependency)
+    admin_id: str = Depends(verify_admin_header)
 ):
     """
     Delete product (admin only)
@@ -306,7 +283,7 @@ def delete_product(
 def get_product_admin(
     product_id: int,
     db: Session = Depends(get_db),
-    admin_id: str = Depends(verify_admin_dependency)
+    admin_id: str = Depends(verify_admin_header)
 ):
     """
     Get single product details (admin view)
