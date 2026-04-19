@@ -238,12 +238,6 @@ def update_product(
             "updated_at": existing_product.updated_at.isoformat() if existing_product.updated_at else None,
         }
     }
-            "image_url": existing_product.image_url,
-            "stock": existing_product.stock,
-            "active": existing_product.active,
-            "updated_at": existing_product.updated_at.isoformat() if existing_product.updated_at else None,
-        }
-    }
 
 
 @router.delete("/admin/products/{product_id}")

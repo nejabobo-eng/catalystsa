@@ -40,3 +40,11 @@ def root():
         "version": "2.0-products-admin",
         "timestamp": "2024-01-15T12:00:00Z"
     }
+
+
+@app.get("/__version")
+def version():
+    return {
+        "version": "NEW-PRODUCTS-ADMIN-V1",
+        "routes_loaded": "products_admin with x1.6 markup"
+    }
