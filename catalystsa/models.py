@@ -47,7 +47,7 @@ class Order(Base):
     checkout_id = Column(String, unique=True, index=True)
     amount = Column(Integer)  # in cents (total after delivery)
     currency = Column(String, default="ZAR")
-    status = Column(String, default="paid")  # pending, paid, processing, shipped, delivered, failed
+    status = Column(String, default="paid")  # paid, processing, shipped, delivered
     customer_name = Column(String, nullable=True)
     customer_email = Column(String, nullable=True)
     phone = Column(String, nullable=True)
@@ -57,8 +57,10 @@ class Order(Base):
     delivery_fee = Column(Integer, nullable=True)  # in cents
     items = Column(String, nullable=True)  # JSON string of cart items
     payment_method = Column(String, nullable=True)
+    tracking_number = Column(String, nullable=True)  # for shipped orders
     created_at = Column(DateTime, default=datetime.utcnow)
     paid_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 

@@ -111,10 +111,10 @@ def get_order_detail(
 ):
     """Get full order details"""
     order = db.query(Order).filter(Order.order_number == order_number).first()
-    
+
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    
+
     return {
         "id": order.id,
         "order_number": order.order_number,
@@ -125,6 +125,7 @@ def get_order_detail(
         "city": order.city or "N/A",
         "postal_code": order.postal_code or "N/A",
         "status": order.status,
+        "tracking_number": order.tracking_number,
         "items": order.items or "[]",
         "subtotal": (order.amount / 100) if order.amount else 0,
         "delivery_fee": (order.delivery_fee / 100) if order.delivery_fee else 0,
@@ -132,6 +133,7 @@ def get_order_detail(
         "currency": order.currency or "ZAR",
         "created_at": order.created_at.isoformat() if order.created_at else None,
         "paid_at": order.paid_at.isoformat() if order.paid_at else None,
+        "updated_at": order.updated_at.isoformat() if order.updated_at else None,
     }
 
 
@@ -142,36 +144,67 @@ def update_order_status(
     admin=Depends(verify_admin_header),
     db: Session = Depends(get_db)
 ):
-    """Update order status only"""
-    ALLOWED_STATUSES = ["pending", "paid", "processing", "shipped", "delivered"]
-    
+    """
+    Update order status with workflow validation
+
+    Status flow:
+    - paid → processing
+    - processing → shipped
+    - shipped → delivered
+    """
+    ALLOWED_STATUSES = ["paid", "processing", "shipped", "delivered"]
+
+    # Status transition rules (forward flow only)
+    STATUS_FLOW = {
+        "paid": ["processing"],
+        "processing": ["shipped"],
+        "shipped": ["delivered"],
+        "delivered": []  # Final state
+    }
+
     new_status = payload.get("status", "").strip().lower()
-    
+    tracking_number = payload.get("tracking_number", "").strip()
+
     if not new_status:
         raise HTTPException(status_code=400, detail="Status required")
-    
+
     if new_status not in ALLOWED_STATUSES:
         raise HTTPException(
             status_code=400, 
             detail=f"Invalid status. Allowed: {', '.join(ALLOWED_STATUSES)}"
         )
-    
+
     order = db.query(Order).filter(Order.order_number == order_number).first()
-    
+
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    
+
+    # Validate status transition
+    allowed_next = STATUS_FLOW.get(order.status, [])
+    if new_status not in allowed_next and new_status != order.status:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot change status from '{order.status}' to '{new_status}'. Allowed: {', '.join(allowed_next) if allowed_next else 'none (final state)'}"
+        )
+
     old_status = order.status
     order.status = new_status
+
+    # Update tracking number if provided (usually when marking as shipped)
+    if tracking_number:
+        order.tracking_number = tracking_number
+
     db.commit()
     db.refresh(order)
-    
-    logger.info(f"Order #{order_number} status updated: {old_status} -> {new_status}")
-    
+
+    logger.info(f"Order #{order_number} status updated: {old_status} -> {new_status}" + 
+                (f" (tracking: {tracking_number})" if tracking_number else ""))
+
     return {
         "order_number": order.order_number,
         "status": order.status,
-        "updated_at": datetime.utcnow().isoformat()
+        "tracking_number": order.tracking_number,
+        "updated_at": order.updated_at.isoformat() if order.updated_at else datetime.utcnow().isoformat()
     }
 
 
