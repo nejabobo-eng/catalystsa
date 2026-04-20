@@ -41,6 +41,8 @@ class ProductCreate(BaseModel):
     image_url: Optional[str] = None
     stock: int = 0
     active: bool = True
+    weight_kg: Optional[float] = 0.5  # Default: 0.5kg (small item)
+    size_category: Optional[str] = "small"  # small/medium/large/bulky
 
 
 class ProductUpdate(BaseModel):
@@ -50,6 +52,8 @@ class ProductUpdate(BaseModel):
     image_url: Optional[str] = None
     stock: Optional[int] = None
     active: Optional[bool] = None
+    weight_kg: Optional[float] = None
+    size_category: Optional[str] = None
 
 
 class ProductResponse(BaseModel):
@@ -102,6 +106,8 @@ def list_products_admin(
                 "image_url": p.image_url,
                 "stock": p.stock,
                 "active": p.active,
+                "weight_kg": p.weight_kg or 0.5,
+                "size_category": p.size_category or "small",
                 "created_at": p.created_at.isoformat() if p.created_at else None,
                 "updated_at": p.updated_at.isoformat() if p.updated_at else None,
             }
@@ -153,7 +159,9 @@ def create_product(
         price=selling_price,  # Auto-calculated
         image_url=product.image_url,
         stock=product.stock,
-        active=product.active
+        active=product.active,
+        weight_kg=product.weight_kg or 0.5,
+        size_category=product.size_category or "small"
     )
 
     db.add(new_product)
@@ -215,6 +223,14 @@ def update_product(
         existing_product.stock = product.stock
     if product.active is not None:
         existing_product.active = product.active
+    if product.weight_kg is not None:
+        if product.weight_kg < 0:
+            raise HTTPException(status_code=400, detail="Weight cannot be negative")
+        existing_product.weight_kg = product.weight_kg
+    if product.size_category is not None:
+        if product.size_category not in ["small", "medium", "large", "bulky"]:
+            raise HTTPException(status_code=400, detail="Invalid size category")
+        existing_product.size_category = product.size_category
 
     existing_product.updated_at = datetime.utcnow()
 
@@ -329,6 +345,8 @@ def list_products_public(
                 "price_display": f"R{p.price / 100:.2f}",
                 "image_url": p.image_url,
                 "stock": p.stock,
+                "weight_kg": p.weight_kg or 0.5,
+                "size_category": p.size_category or "small",
             }
             for p in products
         ]

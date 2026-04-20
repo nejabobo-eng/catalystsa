@@ -41,3 +41,33 @@ def migrate_tracking_columns(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Migration failed: {str(e)}")
+
+
+@router.post("/admin/migrate-product-logistics")
+def migrate_product_logistics(
+    admin=Depends(verify_admin_header),
+    db=Depends(get_db)
+):
+    """One-time migration to add weight_kg and size_category to products"""
+    try:
+        sql = text("""
+            ALTER TABLE products 
+            ADD COLUMN IF NOT EXISTS weight_kg FLOAT DEFAULT 0.5,
+            ADD COLUMN IF NOT EXISTS size_category VARCHAR DEFAULT 'small';
+
+            -- Set reasonable defaults for existing products
+            UPDATE products 
+            SET weight_kg = 0.5, size_category = 'small'
+            WHERE weight_kg IS NULL OR size_category IS NULL;
+        """)
+
+        db.execute(sql)
+        db.commit()
+
+        return {
+            "success": True,
+            "message": "Migration completed: added weight_kg and size_category columns to products"
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Migration failed: {str(e)}")

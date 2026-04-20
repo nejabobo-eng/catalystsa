@@ -5,12 +5,16 @@ from catalystsa.database import Base
 
 class Product(Base):
     """
-    Product catalog - MVP with automatic markup pricing
+    Product catalog - MVP with automatic markup pricing + logistics
 
     Business logic:
     - Admin enters cost_price (what you paid)
     - System calculates price = cost_price * 1.6 (rounded to nearest R10)
     - Customer sees only the final selling price
+
+    Logistics (weight-based delivery):
+    - weight_kg: actual weight for shipping calculation
+    - size_category: small/medium/large/bulky (affects delivery cost)
 
     Design principles:
     - Both prices stored in cents (consistent with Order model)
@@ -28,6 +32,11 @@ class Product(Base):
     image_url = Column(String, nullable=True)
     stock = Column(Integer, default=0)
     active = Column(Boolean, default=True)  # soft delete - preserve order references
+
+    # Logistics fields for delivery calculation
+    weight_kg = Column(Float, nullable=True, default=0.5)  # Default: 0.5kg (small item)
+    size_category = Column(String, nullable=True, default="small")  # small/medium/large/bulky
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
