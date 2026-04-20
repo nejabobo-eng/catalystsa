@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from catalystsa.database import Base, engine
-from catalystsa.routes import orders, payments, webhooks, admin, public, products_admin
+from catalystsa.routes import orders, payments, webhooks, admin, public, products_admin, migrate
 
 app = FastAPI()
 
@@ -32,6 +32,7 @@ app.include_router(payments.router, prefix="/payments", tags=["Payments"])
 app.include_router(webhooks.router, prefix="/yoco", tags=["Webhooks"])
 app.include_router(public.router, prefix="", tags=["Public"])
 app.include_router(admin.router, prefix="", tags=["Admin"])
+app.include_router(migrate.router, prefix="", tags=["Migration"])
 
 
 @app.get("/")
