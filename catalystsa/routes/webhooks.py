@@ -230,9 +230,18 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
         logger.info(f"   Creating new order...")
         ensure_sequence_exists(db)
 
+        # CLEAN MODEL: amount = Yoco total, but we store SUBTOTAL only
+        # This prevents double-counting delivery in admin/reports
+        subtotal_cents = amount - delivery_fee_cents
+
+        logger.info(f"   Payment breakdown:")
+        logger.info(f"   - Yoco total: {amount} cents")
+        logger.info(f"   - Delivery: {delivery_fee_cents} cents")
+        logger.info(f"   - Subtotal (products): {subtotal_cents} cents")
+
         new_order = Order(
             checkout_id=checkout_id,  # UNIQUE constraint - DB rejects duplicates
-            amount=amount,
+            amount=subtotal_cents,  # ✅ SUBTOTAL ONLY (products)
             currency=currency,
             status="paid",
             paid_at=datetime.utcnow(),
@@ -242,7 +251,7 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
             address=address if address else None,
             city=city if city else None,
             postal_code=postal_code if postal_code else None,
-            delivery_fee=delivery_fee_cents if delivery_fee_cents > 0 else None,
+            delivery_fee=delivery_fee_cents if delivery_fee_cents > 0 else None,  # ✅ DELIVERY SEPARATE
             items=items_str if items_str else None
         )
         db.add(new_order)

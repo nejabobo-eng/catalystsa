@@ -92,7 +92,7 @@ def get_orders(
                 "customer_name": order.customer_name or "N/A",
                 "email": order.customer_email or "N/A",
                 "status": order.status,
-                "total": ((order.amount or 0) + (order.delivery_fee or 0)) / 100,
+                "total": ((order.amount or 0) + (order.delivery_fee or 0)) / 100,  # amount=subtotal, delivery_fee=shipping
                 "created_at": order.created_at.isoformat() if order.created_at else None,
             }
             for order in orders
@@ -127,9 +127,9 @@ def get_order_detail(
         "status": order.status,
         "tracking_number": order.tracking_number,
         "items": order.items or "[]",
-        "subtotal": (order.amount / 100) if order.amount else 0,
-        "delivery_fee": (order.delivery_fee / 100) if order.delivery_fee else 0,
-        "total": ((order.amount or 0) + (order.delivery_fee or 0)) / 100,
+        "subtotal": (order.amount / 100) if order.amount else 0,  # ✅ Products only
+        "delivery_fee": (order.delivery_fee / 100) if order.delivery_fee else 0,  # ✅ Shipping
+        "total": ((order.amount or 0) + (order.delivery_fee or 0)) / 100,  # ✅ Subtotal + Delivery
         "currency": order.currency or "ZAR",
         "created_at": order.created_at.isoformat() if order.created_at else None,
         "paid_at": order.paid_at.isoformat() if order.paid_at else None,
