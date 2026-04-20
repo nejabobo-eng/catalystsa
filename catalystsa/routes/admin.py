@@ -109,11 +109,29 @@ def get_order_detail(
     admin=Depends(verify_admin_header),
     db: Session = Depends(get_db)
 ):
-    """Get full order details"""
+    """
+    Get full order details with financial integrity validation
+
+    CRITICAL: Backend owns financial truth, not stored totals
+    Always calculates total from subtotal + delivery (never trusts stored value)
+    """
     order = db.query(Order).filter(Order.order_number == order_number).first()
 
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+
+    # FINANCIAL INTEGRITY: Always calculate in cents, convert to rands only for display
+    subtotal_cents = order.amount or 0
+    delivery_cents = order.delivery_fee or 0
+    calculated_total_cents = subtotal_cents + delivery_cents
+
+    # Detect financial inconsistencies (legacy data warning)
+    is_legacy_pricing = False
+    if delivery_cents == 80000:  # Old R800 delivery
+        is_legacy_pricing = True
+    elif delivery_cents != 9900 and delivery_cents != 0:  # Not R99 or R0
+        logger.warning(f"Order #{order_number} has unusual delivery fee: {delivery_cents} cents")
+        is_legacy_pricing = True
 
     return {
         "id": order.id,
@@ -127,10 +145,16 @@ def get_order_detail(
         "status": order.status,
         "tracking_number": order.tracking_number,
         "items": order.items or "[]",
-        "subtotal": (order.amount / 100) if order.amount else 0,  # ✅ Products only
-        "delivery_fee": (order.delivery_fee / 100) if order.delivery_fee else 0,  # ✅ Shipping
-        "total": ((order.amount or 0) + (order.delivery_fee or 0)) / 100,  # ✅ Subtotal + Delivery
+
+        # FINANCIAL DATA: All values in cents internally, converted to rands for display
+        "subtotal": subtotal_cents / 100,  # cents → rands
+        "delivery_fee": delivery_cents / 100,  # cents → rands
+        "total": calculated_total_cents / 100,  # CALCULATED, not stored
         "currency": order.currency or "ZAR",
+
+        # Integrity flags
+        "is_legacy_pricing": is_legacy_pricing,  # Flag old pricing for UI warning
+
         "created_at": order.created_at.isoformat() if order.created_at else None,
         "paid_at": order.paid_at.isoformat() if order.paid_at else None,
         "updated_at": order.updated_at.isoformat() if order.updated_at else None,
@@ -213,17 +237,68 @@ def verify_admin_token(authorization: str = Header(None)):
     """Verify if admin token is valid"""
     if not authorization:
         return {"valid": False}
-    
+
     try:
         parts = authorization.split()
         if len(parts) != 2 or parts[0].lower() != "bearer":
             return {"valid": False}
-        
+
         token = parts[1]
         verify_token(token)
         return {"valid": True}
     except:
         return {"valid": False}
+
+
+@router.get("/admin/financial-audit")
+def financial_audit(
+    admin=Depends(verify_admin_header),
+    db: Session = Depends(get_db)
+):
+    """
+    Financial integrity audit endpoint
+
+    Detects:
+    - Orders with inconsistent pricing
+    - Legacy delivery fees
+    - Unusual amounts
+
+    Returns list of orders requiring review
+    """
+    all_orders = db.query(Order).all()
+
+    issues = []
+    for order in all_orders:
+        order_issues = []
+
+        # Check for legacy R800 delivery
+        if order.delivery_fee == 80000:
+            order_issues.append("LEGACY_DELIVERY_R800")
+
+        # Check for unusual delivery (not R0, R99, or R800)
+        elif order.delivery_fee not in [0, 9900, 80000] and order.delivery_fee is not None:
+            order_issues.append(f"UNUSUAL_DELIVERY_{order.delivery_fee}_CENTS")
+
+        # Check for zero amounts
+        if order.amount == 0 or order.amount is None:
+            order_issues.append("ZERO_SUBTOTAL")
+
+        if order_issues:
+            issues.append({
+                "order_number": order.order_number,
+                "customer_email": order.customer_email,
+                "status": order.status,
+                "subtotal_cents": order.amount,
+                "delivery_cents": order.delivery_fee,
+                "created_at": order.created_at.isoformat() if order.created_at else None,
+                "issues": order_issues
+            })
+
+    return {
+        "total_orders": len(all_orders),
+        "orders_with_issues": len(issues),
+        "issues": issues
+    }
 
 
 def _verify_password(provided: str, expected: str) -> bool:
