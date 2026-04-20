@@ -3,10 +3,12 @@ Public API routes for customers
 No authentication required
 Single source of truth for order lookup
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from catalystsa.database import SessionLocal
 from catalystsa.models import Order, WebhookEvent
+from pydantic import BaseModel
+import json
 
 router = APIRouter()
 
@@ -17,6 +19,86 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+class TrackOrderRequest(BaseModel):
+    order_number: int
+    email: str
+
+
+@router.post("/orders/track")
+def track_order(payload: TrackOrderRequest, db: Session = Depends(get_db)):
+    """
+    Customer order tracking (public endpoint)
+
+    Security: Requires BOTH order_number AND email to match
+    This prevents data leaks while allowing customer self-service
+
+    Returns:
+    - Order details
+    - Current status
+    - Tracking number (if shipped)
+    - Timeline (basic version - will be enhanced with audit logs)
+    """
+    # Normalize email (case-insensitive lookup)
+    normalized_email = payload.email.strip().lower()
+
+    # Dual-key verification: both order_number AND email must match
+    order = db.query(Order).filter(
+        Order.order_number == payload.order_number,
+        Order.customer_email == normalized_email
+    ).first()
+
+    if not order:
+        # Generic error - don't reveal if order exists or email is wrong (security)
+        raise HTTPException(
+            status_code=404, 
+            detail="ORDER_NOT_FOUND"
+        )
+
+    # Parse items JSON
+    try:
+        items = json.loads(order.items) if order.items else []
+    except:
+        items = []
+
+    # Build basic timeline (will be replaced with audit logs later)
+    timeline = []
+    if order.created_at:
+        timeline.append({
+            "status": "created",
+            "timestamp": order.created_at.isoformat()
+        })
+    if order.paid_at:
+        timeline.append({
+            "status": "paid",
+            "timestamp": order.paid_at.isoformat()
+        })
+    if order.updated_at and order.status in ["processing", "shipped", "delivered"]:
+        timeline.append({
+            "status": order.status,
+            "timestamp": order.updated_at.isoformat()
+        })
+
+    return {
+        "order_number": order.order_number,
+        "status": order.status,
+        "tracking_number": order.tracking_number,
+        "customer_name": order.customer_name,
+        "delivery_address": {
+            "address": order.address,
+            "city": order.city,
+            "postal_code": order.postal_code
+        },
+        "subtotal": (order.amount / 100) if order.amount else 0,
+        "delivery_fee": (order.delivery_fee / 100) if order.delivery_fee else 0,
+        "total": ((order.amount or 0) + (order.delivery_fee or 0)) / 100,
+        "currency": order.currency or "ZAR",
+        "items": items,
+        "timeline": timeline,
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+        "paid_at": order.paid_at.isoformat() if order.paid_at else None
+    }
 
 
 @router.get("/debug/all-orders")
