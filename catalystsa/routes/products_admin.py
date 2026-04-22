@@ -1,4 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import UploadFile, File
+import cloudinary
+import cloudinary.uploader
 from sqlalchemy.orm import Session
 from catalystsa.database import SessionLocal
 from catalystsa.models import Product
@@ -8,6 +11,30 @@ from typing import Optional
 from datetime import datetime
 
 router = APIRouter()
+
+@router.post('/upload-image')
+@router.post('/admin/upload-image')
+def upload_image(
+    file: UploadFile = File(...),
+    admin_id: str = Depends(verify_admin_header)
+):
+    """
+    Upload image to Cloudinary (admin only).
+    Returns: { "url": "https://...", "public_id": "..." }
+    """
+    try:
+        # Upload with folder and basic transformations
+        upload_result = cloudinary.uploader.upload(
+            file.file,
+            folder="catalystsa",
+            transformation=[{"width": 1200, "crop": "limit", "quality": "auto"}],
+            resource_type="image"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+    return {"url": upload_result.get('secure_url'), "public_id": upload_result.get('public_id')}
+
 
 
 def get_db():
