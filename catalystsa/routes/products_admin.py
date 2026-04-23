@@ -3,7 +3,7 @@ from fastapi import UploadFile, File
 import cloudinary
 import cloudinary.uploader
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, case
+from sqlalchemy import or_, case, func
 from catalystsa.database import SessionLocal
 from catalystsa.models import Product
 from catalystsa.admin_auth import verify_admin_header  # Use existing function
@@ -139,6 +139,59 @@ def list_products_admin(
                 "created_at": p.created_at.isoformat() if p.created_at else None,
                 "updated_at": p.updated_at.isoformat() if p.updated_at else None,
             }
+
+
+@router.get("/products/recommendations")
+def recommend_products(
+    product_id: int,
+    db: Session = Depends(get_db),
+    limit: int = 6
+):
+    """
+    Simple recommendations endpoint.
+    Rules:
+      - find product by id
+      - recommend other active products in similar price range (±20%)
+      - boost name/description keyword matches
+    """
+    target = db.query(Product).filter(Product.id == product_id).first()
+    if not target:
+        return {"products": []}
+
+    price = target.price or 0
+    low = int(price * 0.8)
+    high = int(price * 1.2)
+
+    pattern = f"%{(target.name or '').split()[0]}%" if target.name else "%"
+
+    # Score by price distance and keyword match (simple)
+    keyword_score = case([(Product.name.ilike(pattern), 1), (Product.description.ilike(pattern), 1)], else_=0)
+    price_distance = func.abs(Product.price - price)
+
+    query = (
+        db.query(Product)
+        .filter(Product.id != product_id, Product.active == True)
+        .filter(or_(Product.price.between(low, high), Product.name.ilike(pattern), Product.description.ilike(pattern)))
+        .order_by(keyword_score.desc(), price_distance.asc(), Product.created_at.desc())
+        .limit(limit)
+    )
+
+    results = query.all()
+
+    return {
+        "products": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "description": p.description,
+                "price": p.price,
+                "price_display": f"R{p.price / 100:.2f}",
+                "image_url": p.image_url,
+                "stock": p.stock,
+            }
+            for p in results
+        ]
+    }
             for p in products
         ],
         "total": len(products)
