@@ -3,6 +3,7 @@ from fastapi import UploadFile, File
 import cloudinary
 import cloudinary.uploader
 from sqlalchemy.orm import Session
+from sqlalchemy import or_, case
 from catalystsa.database import SessionLocal
 from catalystsa.models import Product
 from catalystsa.admin_auth import verify_admin_header  # Use existing function
@@ -376,6 +377,55 @@ def list_products_public(
                 "size_category": p.size_category or "small",
             }
             for p in products
+        ]
+    }
+
+
+@router.get("/products/search")
+def search_products(
+    q: str,
+    db: Session = Depends(get_db),
+    limit: int = 50,
+    include_inactive: bool = False
+):
+    """
+    Search products by name or description (case-insensitive, partial matches).
+    Returns products ordered by whether the name starts with the query then by recency.
+    """
+    if not q or not q.strip():
+        return {"products": []}
+
+    pattern = f"%{q}%"
+    query = db.query(Product)
+    if not include_inactive:
+        query = query.filter(Product.active == True)
+
+    # Boost items whose name starts with the query
+    score = case(
+        [(Product.name.ilike(f"{q}%"), 2), (Product.name.ilike(pattern), 1)],
+        else_=0,
+    )
+
+    results = (
+        query
+        .filter(or_(Product.name.ilike(pattern), Product.description.ilike(pattern)))
+        .order_by(score.desc(), Product.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "products": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "description": p.description,
+                "price": p.price,
+                "price_display": f"R{p.price / 100:.2f}",
+                "image_url": p.image_url,
+                "stock": p.stock,
+            }
+            for p in results
         ]
     }
 
