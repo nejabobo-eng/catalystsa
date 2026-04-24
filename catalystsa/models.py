@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text, ForeignKey
 from datetime import datetime
 from catalystsa.database import Base
 
@@ -32,6 +32,8 @@ class Product(Base):
     image_url = Column(String, nullable=True)
     stock = Column(Integer, default=0)
     active = Column(Boolean, default=True)  # soft delete - preserve order references
+    # Category relationship (nullable to avoid breaking existing products)
+    category_id = Column(Integer, ForeignKey('categories.id'), nullable=True)
 
     # Tracking for analytics
     sales_count = Column(Integer, default=0)

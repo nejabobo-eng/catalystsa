@@ -6,6 +6,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, case, func
 from catalystsa.database import SessionLocal
 from catalystsa.models import Product
+from sqlalchemy import inspect
+from catalystsa.models import Product, \
+    # import Category lazily to avoid circular import if file not present
+
 from catalystsa.admin_auth import verify_admin_header  # Use existing function
 from pydantic import BaseModel
 from typing import Optional
@@ -139,6 +143,48 @@ def list_products_admin(
                 "created_at": p.created_at.isoformat() if p.created_at else None,
                 "updated_at": p.updated_at.isoformat() if p.updated_at else None,
             }
+
+
+@router.get('/admin/categories')
+def list_categories_admin(db: Session = Depends(get_db), admin_id: str = Depends(verify_admin_header)):
+    # If categories table doesn't exist yet, return empty list
+    try:
+        inspector = inspect(db.bind)
+        if 'categories' not in inspector.get_table_names():
+            return {"categories": []}
+    except Exception:
+        pass
+
+    rows = db.execute(text('SELECT id, name, slug, created_at FROM categories ORDER BY name')).fetchall()
+    return {"categories": [dict(r) for r in rows]}
+
+
+@router.post('/admin/categories')
+def create_category_admin(payload: dict, db: Session = Depends(get_db), admin_id: str = Depends(verify_admin_header)):
+    name = payload.get('name')
+    slug = payload.get('slug')
+    if not name or not slug:
+        raise HTTPException(status_code=400, detail='name and slug required')
+    try:
+        db.execute(text('INSERT INTO categories (name, slug) VALUES (:name, :slug) ON CONFLICT (slug) DO NOTHING'), {'name': name, 'slug': slug})
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"success": True}
+
+
+@router.delete('/admin/categories/{category_id}')
+def delete_category_admin(category_id: int, db: Session = Depends(get_db), admin_id: str = Depends(verify_admin_header)):
+    try:
+        # set related products' category_id to NULL before deleting
+        db.execute(text('UPDATE products SET category_id = NULL WHERE category_id = :cid'), {'cid': category_id})
+        db.execute(text('DELETE FROM categories WHERE id = :cid'), {'cid': category_id})
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"success": True}
 
 
 @router.get("/products/recommendations")
