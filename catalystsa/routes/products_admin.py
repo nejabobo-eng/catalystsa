@@ -43,6 +43,14 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        # Make sure any exception during request handling rolls back the
+        # transaction before the session is closed and returned to the pool.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 
