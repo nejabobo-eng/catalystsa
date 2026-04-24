@@ -32,16 +32,7 @@ class Product(Base):
     image_url = Column(String, nullable=True)
     stock = Column(Integer, default=0)
     active = Column(Boolean, default=True)  # soft delete - preserve order references
-    # Category relationship (nullable to avoid breaking existing products)
-    category_id = Column(Integer, ForeignKey('categories.id'), nullable=True)
-
-    # Tracking for analytics
-    sales_count = Column(Integer, default=0)
-    views_count = Column(Integer, default=0)
-
-    # Logistics fields for delivery calculation
-    weight_kg = Column(Float, nullable=True, default=0.5)  # Default: 0.5kg (small item)
-    size_category = Column(String, nullable=True, default="small")  # small/medium/large/bulky
+    # Keep model minimal for stability: don't rely on optional analytic/logistics fields
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

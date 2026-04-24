@@ -3,7 +3,7 @@ from fastapi import UploadFile, File
 import cloudinary
 import cloudinary.uploader
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, case, func, inspect, text
+from sqlalchemy import or_, case, func, text
 from catalystsa.database import get_db
 from catalystsa.models import Product
 
@@ -15,16 +15,7 @@ from datetime import datetime
 router = APIRouter()
 
 
-def _get_product_columns(db: Session):
-    """Return list of product column names or empty list on error."""
-    try:
-        inspector = inspect(db.bind)
-        if 'products' not in inspector.get_table_names():
-            return []
-        cols = [c['name'] for c in inspector.get_columns('products')]
-        return cols
-    except Exception:
-        return []
+# Minimal, stable product endpoints - no dynamic schema checks
 
 @router.post('/upload-image')
 @router.post('/admin/upload-image')
@@ -158,118 +149,31 @@ def list_products_admin(
         traceback.print_exc()
         return {"products": [], "total": 0, "error": str(e)}
 
+# Categories and analytics are disabled temporarily for stability.
 @router.get('/admin/categories')
 def list_categories_admin(db: Session = Depends(get_db), admin_id: str = Depends(verify_admin_header)):
-    # If categories table doesn't exist yet, return empty list
-    try:
-        inspector = inspect(db.bind)
-        if 'categories' not in inspector.get_table_names():
-            return {"categories": []}
-    except Exception:
-        pass
-
-    rows = db.execute(text('SELECT id, name, slug, created_at FROM categories ORDER BY name')).fetchall()
-    return {"categories": [dict(r) for r in rows]}
+    return {"categories": []}
 
 
 @router.post('/admin/categories')
 def create_category_admin(payload: dict, db: Session = Depends(get_db), admin_id: str = Depends(verify_admin_header)):
-    name = payload.get('name')
-    slug = payload.get('slug')
-    if not name or not slug:
-        raise HTTPException(status_code=400, detail='name and slug required')
-    try:
-        db.execute(text('INSERT INTO categories (name, slug) VALUES (:name, :slug) ON CONFLICT (slug) DO NOTHING'), {'name': name, 'slug': slug})
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    return {"success": True}
+    raise HTTPException(status_code=501, detail="Categories temporarily disabled")
 
 
 @router.get('/categories')
 def list_categories_public(db: Session = Depends(get_db)):
-    """
-    Public endpoint: list categories for storefront dropdown.
-    Returns id, name and slug ordered by name. If the table is missing or an
-    error occurs, returns an empty list to keep storefront resilient.
-    """
-    try:
-        # Defensive: if categories table doesn't exist, return empty list
-        inspector = inspect(db.bind)
-        if 'categories' not in inspector.get_table_names():
-            return {"categories": []}
-
-        rows = db.execute(text('SELECT id, name, slug FROM categories ORDER BY name')).fetchall()
-        return {"categories": [dict(r) for r in rows]}
-    except Exception:
-        return {"categories": []}
+    return {"categories": []}
 
 
 @router.delete('/admin/categories/{category_id}')
 def delete_category_admin(category_id: int, db: Session = Depends(get_db), admin_id: str = Depends(verify_admin_header)):
-    try:
-        # set related products' category_id to NULL before deleting
-        db.execute(text('UPDATE products SET category_id = NULL WHERE category_id = :cid'), {'cid': category_id})
-        db.execute(text('DELETE FROM categories WHERE id = :cid'), {'cid': category_id})
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    return {"success": True}
+    raise HTTPException(status_code=501, detail="Categories temporarily disabled")
 
 
+# Recommendations temporarily disabled for stability
 @router.get("/products/recommendations")
-def recommend_products(
-    product_id: int,
-    db: Session = Depends(get_db),
-    limit: int = 6
-):
-    """
-    Simple recommendations endpoint.
-    Rules:
-      - find product by id
-      - recommend other active products in similar price range (±20%)
-      - boost name/description keyword matches
-    """
-    target = db.query(Product).filter(Product.id == product_id).first()
-    if not target:
-        return {"products": []}
-
-    price = target.price or 0
-    low = int(price * 0.8)
-    high = int(price * 1.2)
-
-    pattern = f"%{(target.name or '').split()[0]}%" if target.name else "%"
-
-    # Score by price distance and keyword match (simple)
-    keyword_score = case([(Product.name.ilike(pattern), 1), (Product.description.ilike(pattern), 1)], else_=0)
-    price_distance = func.abs(Product.price - price)
-
-    query = (
-        db.query(Product)
-        .filter(Product.id != product_id, Product.active == True)
-        .filter(or_(Product.price.between(low, high), Product.name.ilike(pattern), Product.description.ilike(pattern)))
-        .order_by(keyword_score.desc(), price_distance.asc(), Product.created_at.desc())
-        .limit(limit)
-    )
-
-    results = query.all()
-
-    return {
-        "products": [
-            {
-                "id": p.id,
-                "name": p.name,
-                "description": p.description,
-                "price": p.price,
-                "price_display": f"R{p.price / 100:.2f}",
-                "image_url": p.image_url,
-                "stock": p.stock,
-            }
-            for p in results
-        ]
-    }
+def recommend_products(product_id: int, db: Session = Depends(get_db), limit: int = 6):
+    return {"products": []}
 
 
 @router.post("/admin/products")
@@ -306,25 +210,16 @@ def create_product(
     # Apply markup: x1.6 rounded to nearest R10
     selling_price = apply_markup(product.cost_price)
 
-    # Create product - build kwargs defensively based on actual DB columns
-    cols = _get_product_columns(db)
-    p_kwargs = {
-        "name": product.name,
-        "description": product.description,
-        "cost_price": product.cost_price,
-        "price": selling_price,
-        "image_url": product.image_url,
-        "stock": product.stock,
-        "active": product.active,
-        "weight_kg": product.weight_kg or 0.5,
-        "size_category": product.size_category or "small",
-    }
-
-    # Only include category_id if products table actually has that column
-    if hasattr(product, "category_id") and "category_id" in cols and getattr(product, "category_id") is not None:
-        p_kwargs["category_id"] = getattr(product, "category_id")
-
-    new_product = Product(**p_kwargs)
+    # Create product - simple stable model (no optional fields)
+    new_product = Product(
+        name=product.name,
+        description=product.description,
+        cost_price=product.cost_price,
+        price=selling_price,
+        image_url=product.image_url,
+        stock=product.stock,
+        active=product.active
+    )
 
     db.add(new_product)
     db.commit()
@@ -517,37 +412,11 @@ def list_products_public(
             # should only be applied when the client explicitly requests it.
             query = query.filter(getattr(Product, 'category_id', None) == category_id)
 
-        # Choose ordering
-        if sort == "views":
-            # Use coalesce to treat NULL as 0
-            order_clause = [func.coalesce(Product.views_count, 0).desc(), Product.created_at.desc()]
-        elif sort == "newest":
-            order_clause = [Product.created_at.desc()]
-        elif sort == "sales":
-            order_clause = [func.coalesce(Product.sales_count, 0).desc(), Product.created_at.desc()]
-        else:
-            # Fallback to name ordering
-            order_clause = [Product.name]
-
+        # Simplified ordering: newest first (stable)
         offset = max(page - 1, 0) * max(limit, 1)
+        products = query.order_by(Product.created_at.desc()).offset(offset).limit(limit).all()
 
-        # Attempt to run the preferred query, but first verify columns exist to
-        # avoid raising errors when migrations haven't been applied yet.
-        cols = _get_product_columns(db)
-        needs_check = any(c in ['views_count', 'sales_count', 'category_id'] for c in cols)
-
-        try:
-            if sort == 'views' and 'views_count' in cols:
-                products = query.order_by(func.coalesce(Product.views_count, 0).desc(), Product.created_at.desc()).offset(offset).limit(limit).all()
-            elif sort in ('sales', 'top_selling') and 'sales_count' in cols:
-                products = query.order_by(func.coalesce(Product.sales_count, 0).desc(), Product.created_at.desc()).offset(offset).limit(limit).all()
-            else:
-                products = query.order_by(Product.created_at.desc()).offset(offset).limit(limit).all()
-        except Exception:
-            # Final fallback if anything unexpected happens
-            products = query.order_by(Product.created_at.desc()).offset(offset).limit(limit).all()
-
-        # Build response safely - don't assume views_count/sales_count exist in DB
+        # Build minimal response
         out = []
         for p in products:
             out.append({
@@ -558,10 +427,6 @@ def list_products_public(
                 "price_display": f"R{p.price / 100:.2f}",
                 "image_url": p.image_url,
                 "stock": p.stock,
-                "weight_kg": p.weight_kg or 0.5,
-                "size_category": p.size_category or "small",
-                "views_count": getattr(p, 'views_count', 0) or 0,
-                "sales_count": getattr(p, 'sales_count', 0) or 0,
             })
 
         return {"products": out}
