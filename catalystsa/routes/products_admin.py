@@ -473,6 +473,7 @@ def list_products_public(
     include_out_of_stock: bool = False,
     category_id: Optional[int] = None
 ):
+    try:
     """
     Public product catalog
     Supports server-side sorting and pagination.
@@ -538,6 +539,11 @@ def list_products_public(
         })
 
     return {"products": out}
+    except Exception as e:
+        # Log traceback to stdout/stderr for Render logs and return safe error
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/products/search")
