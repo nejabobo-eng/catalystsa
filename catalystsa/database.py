@@ -14,3 +14,23 @@ engine = create_engine(
 
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
+
+
+def get_db():
+    """Provide a transactional scope around a series of operations.
+
+    This dependency yields a SQLAlchemy Session and ensures that on any
+    exception the session is rolled back before being closed. Use this
+    from route functions as: db: Session = Depends(get_db)
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        db.close()
