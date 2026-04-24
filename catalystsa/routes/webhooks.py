@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from catalystsa.database import SessionLocal
+from catalystsa.database import get_db
 from catalystsa.models import Order, WebhookEvent
 from catalystsa.order_sequence import get_next_order_number, ensure_sequence_exists
 from catalystsa.email_service import send_customer_order_confirmation, send_admin_order_notification
@@ -13,12 +13,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# use centralized get_db from catalystsa.database
 
 
 # Removed - no longer needed. Yoco sends flat structure with "id" field.

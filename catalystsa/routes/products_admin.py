@@ -4,7 +4,7 @@ import cloudinary
 import cloudinary.uploader
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, case, func, inspect, text
-from catalystsa.database import SessionLocal
+from catalystsa.database import get_db
 from catalystsa.models import Product
 
 from catalystsa.admin_auth import verify_admin_header  # Use existing function
@@ -51,20 +51,7 @@ def upload_image(
 
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    except Exception:
-        # Make sure any exception during request handling rolls back the
-        # transaction before the session is closed and returned to the pool.
-        try:
-            db.rollback()
-        except Exception:
-            pass
-        raise
-    finally:
-        db.close()
+# use centralized get_db from catalystsa.database
 
 
 def apply_markup(cost_price: int) -> int:
