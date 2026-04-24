@@ -14,6 +14,18 @@ from datetime import datetime
 
 router = APIRouter()
 
+
+def _get_product_columns(db: Session):
+    """Return list of product column names or empty list on error."""
+    try:
+        inspector = inspect(db.bind)
+        if 'products' not in inspector.get_table_names():
+            return []
+        cols = [c['name'] for c in inspector.get_columns('products')]
+        return cols
+    except Exception:
+        return []
+
 @router.post('/upload-image')
 @router.post('/admin/upload-image')
 def upload_image(
@@ -307,20 +319,25 @@ def create_product(
     # Apply markup: x1.6 rounded to nearest R10
     selling_price = apply_markup(product.cost_price)
 
-    # Create product
-    new_product = Product(
-        name=product.name,
-        description=product.description,
-        cost_price=product.cost_price,
-        price=selling_price,  # Auto-calculated
-        image_url=product.image_url,
-        # Only set category_id if provided in payload (guard against missing column)
-        **({"category_id": getattr(product, "category_id") } if hasattr(product, "category_id") and getattr(product, "category_id") is not None else {}),
-        stock=product.stock,
-        active=product.active,
-        weight_kg=product.weight_kg or 0.5,
-        size_category=product.size_category or "small"
-    )
+    # Create product - build kwargs defensively based on actual DB columns
+    cols = _get_product_columns(db)
+    p_kwargs = {
+        "name": product.name,
+        "description": product.description,
+        "cost_price": product.cost_price,
+        "price": selling_price,
+        "image_url": product.image_url,
+        "stock": product.stock,
+        "active": product.active,
+        "weight_kg": product.weight_kg or 0.5,
+        "size_category": product.size_category or "small",
+    }
+
+    # Only include category_id if products table actually has that column
+    if hasattr(product, "category_id") and "category_id" in cols and getattr(product, "category_id") is not None:
+        p_kwargs["category_id"] = getattr(product, "category_id")
+
+    new_product = Product(**p_kwargs)
 
     db.add(new_product)
     db.commit()
@@ -527,13 +544,20 @@ def list_products_public(
 
         offset = max(page - 1, 0) * max(limit, 1)
 
-        # Attempt to run the preferred query (may reference columns added by migration).
-        # If the database schema hasn't been migrated yet (missing columns), fall
-        # back to a safe query that only orders by created_at.
+        # Attempt to run the preferred query, but first verify columns exist to
+        # avoid raising errors when migrations haven't been applied yet.
+        cols = _get_product_columns(db)
+        needs_check = any(c in ['views_count', 'sales_count', 'category_id'] for c in cols)
+
         try:
-            products = query.order_by(*order_clause).offset(offset).limit(limit).all()
+            if sort == 'views' and 'views_count' in cols:
+                products = query.order_by(func.coalesce(Product.views_count, 0).desc(), Product.created_at.desc()).offset(offset).limit(limit).all()
+            elif sort in ('sales', 'top_selling') and 'sales_count' in cols:
+                products = query.order_by(func.coalesce(Product.sales_count, 0).desc(), Product.created_at.desc()).offset(offset).limit(limit).all()
+            else:
+                products = query.order_by(Product.created_at.desc()).offset(offset).limit(limit).all()
         except Exception:
-            # Fallback safe query
+            # Final fallback if anything unexpected happens
             products = query.order_by(Product.created_at.desc()).offset(offset).limit(limit).all()
 
         # Build response safely - don't assume views_count/sales_count exist in DB
