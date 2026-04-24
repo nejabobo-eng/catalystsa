@@ -510,26 +510,34 @@ def list_products_public(
         order_clause = [Product.name]
 
     offset = max(page - 1, 0) * max(limit, 1)
-    products = query.order_by(*order_clause).offset(offset).limit(limit).all()
 
-    return {
-        "products": [
-            {
-                "id": p.id,
-                "name": p.name,
-                "description": p.description,
-                "price": p.price,
-                "price_display": f"R{p.price / 100:.2f}",
-                "image_url": p.image_url,
-                "stock": p.stock,
-                "weight_kg": p.weight_kg or 0.5,
-                "size_category": p.size_category or "small",
-                "views_count": p.views_count or 0,
-                "sales_count": p.sales_count or 0,
-            }
-            for p in products
-        ]
-    }
+    # Attempt to run the preferred query (may reference columns added by migration).
+    # If the database schema hasn't been migrated yet (missing columns), fall
+    # back to a safe query that only orders by created_at.
+    try:
+        products = query.order_by(*order_clause).offset(offset).limit(limit).all()
+    except Exception:
+        # Fallback safe query
+        products = query.order_by(Product.created_at.desc()).offset(offset).limit(limit).all()
+
+    # Build response safely - don't assume views_count/sales_count exist in DB
+    out = []
+    for p in products:
+        out.append({
+            "id": p.id,
+            "name": p.name,
+            "description": p.description,
+            "price": p.price,
+            "price_display": f"R{p.price / 100:.2f}",
+            "image_url": p.image_url,
+            "stock": p.stock,
+            "weight_kg": p.weight_kg or 0.5,
+            "size_category": p.size_category or "small",
+            "views_count": getattr(p, 'views_count', 0) or 0,
+            "sales_count": getattr(p, 'sales_count', 0) or 0,
+        })
+
+    return {"products": out}
 
 
 @router.get("/products/search")
