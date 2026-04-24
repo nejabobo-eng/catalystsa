@@ -294,6 +294,22 @@ async def handle_payment_success(payload: dict, checkout_id: str, db: Session):
         # Side effects (best effort)
         send_emails_best_effort(new_order, delivery_fee_cents)
 
+        # Update sales_count for products referenced in items (best-effort)
+        try:
+            import ast
+            items = ast.literal_eval(items_str) if items_str else []
+            for it in items:
+                pid = it.get('id') or it.get('product_id') or it.get('id')
+                qty = int(it.get('quantity', 1)) if isinstance(it, dict) else 1
+                if pid:
+                    prod = db.query(Product).filter(Product.id == int(pid)).first()
+                    if prod:
+                        prod.sales_count = (prod.sales_count or 0) + qty
+            db.commit()
+        except Exception:
+            # Non-critical - don't block order creation
+            db.rollback()
+
         return {"status": "received", "order_number": order_number, "created": True}
 
     except Exception as e:
