@@ -141,6 +141,10 @@ def list_products_admin(
                 "updated_at": p.updated_at.isoformat() if p.updated_at else None,
             }
 
+            for p in products
+        ],
+        "total": len(products)
+    }
 
 @router.get('/admin/categories')
 def list_categories_admin(db: Session = Depends(get_db), admin_id: str = Depends(verify_admin_header)):
@@ -234,10 +238,6 @@ def recommend_products(
             }
             for p in results
         ]
-    }
-            for p in products
-        ],
-        "total": len(products)
     }
 
 
