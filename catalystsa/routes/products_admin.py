@@ -175,6 +175,25 @@ def create_category_admin(payload: dict, db: Session = Depends(get_db), admin_id
     return {"success": True}
 
 
+@router.get('/categories')
+def list_categories_public(db: Session = Depends(get_db)):
+    """
+    Public endpoint: list categories for storefront dropdown.
+    Returns id, name and slug ordered by name. If the table is missing or an
+    error occurs, returns an empty list to keep storefront resilient.
+    """
+    try:
+        # Defensive: if categories table doesn't exist, return empty list
+        inspector = inspect(db.bind)
+        if 'categories' not in inspector.get_table_names():
+            return {"categories": []}
+
+        rows = db.execute(text('SELECT id, name, slug FROM categories ORDER BY name')).fetchall()
+        return {"categories": [dict(r) for r in rows]}
+    except Exception:
+        return {"categories": []}
+
+
 @router.delete('/admin/categories/{category_id}')
 def delete_category_admin(category_id: int, db: Session = Depends(get_db), admin_id: str = Depends(verify_admin_header)):
     try:
