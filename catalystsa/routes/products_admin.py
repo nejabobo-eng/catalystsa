@@ -473,7 +473,6 @@ def list_products_public(
     include_out_of_stock: bool = False,
     category_id: Optional[int] = None
 ):
-    try:
     """
     Public product catalog
     Supports server-side sorting and pagination.
