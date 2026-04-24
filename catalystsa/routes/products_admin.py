@@ -408,7 +408,8 @@ def list_products_public(
     sort: Optional[str] = "views",  # views | newest | sales
     limit: int = 100,
     page: int = 1,
-    include_out_of_stock: bool = False
+    include_out_of_stock: bool = False,
+    category_id: Optional[int] = None
 ):
     """
     Public product catalog
@@ -421,9 +422,18 @@ def list_products_public(
     - include_out_of_stock: include products with stock <= 0 (default: False)
     """
 
+    # Base: active products
     query = db.query(Product).filter(Product.active == True)
+
+    # Only filter out of stock when requested (default: exclude out of stock)
     if not include_out_of_stock:
         query = query.filter(Product.stock > 0)
+
+    # Apply category filter only when explicitly provided
+    if category_id is not None:
+        # Some existing products may not have category_id set yet; this filter
+        # should only be applied when the client explicitly requests it.
+        query = query.filter(getattr(Product, 'category_id', None) == category_id)
 
     # Choose ordering
     if sort == "views":
