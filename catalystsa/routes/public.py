@@ -6,7 +6,7 @@ Single source of truth for order lookup
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from catalystsa.database import SessionLocal
-from catalystsa.models import Order, WebhookEvent
+from catalystsa.models import Order, WebhookEvent, Product
 from pydantic import BaseModel
 import json
 
@@ -99,6 +99,24 @@ def track_order(payload: TrackOrderRequest, db: Session = Depends(get_db)):
         "created_at": order.created_at.isoformat() if order.created_at else None,
         "paid_at": order.paid_at.isoformat() if order.paid_at else None
     }
+
+
+@router.post("/products/{product_id}/view")
+def increment_view(product_id: int, db: Session = Depends(get_db)):
+    """
+    Increment product views_count (public, fire-and-forget from frontend).
+    """
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    try:
+        product.views_count = (product.views_count or 0) + 1
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    return {"success": True}
 
 
 @router.get("/debug/all-orders")
