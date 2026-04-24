@@ -3,12 +3,9 @@ from fastapi import UploadFile, File
 import cloudinary
 import cloudinary.uploader
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, case, func
+from sqlalchemy import or_, case, func, inspect, text
 from catalystsa.database import SessionLocal
 from catalystsa.models import Product
-from sqlalchemy import inspect
-from catalystsa.models import Product, \
-    # import Category lazily to avoid circular import if file not present
 
 from catalystsa.admin_auth import verify_admin_header  # Use existing function
 from pydantic import BaseModel
