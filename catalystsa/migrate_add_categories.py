@@ -42,9 +42,16 @@ ON CONFLICT (slug) DO NOTHING;
 
 """
 
-try:
-    with engine.begin() as conn:
-        conn.execute(text(sql))
-    print("✅ Migration successful: categories table and product.category_id added and seeded")
-except Exception as e:
-    print(f"❌ Migration failed: {e}")
+
+def run_migration():
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(sql))
+        print("✅ Migration successful: categories table and product.category_id added and seeded")
+    except Exception as e:
+        # Log and continue - migration may already be applied or run in another process
+        print(f"❌ Migration failed or skipped: {e}")
+
+
+if __name__ == "__main__":
+    run_migration()

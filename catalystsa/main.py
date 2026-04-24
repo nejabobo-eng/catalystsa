@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from catalystsa.database import Base, engine
 from catalystsa.routes import orders, payments, webhooks, admin, public, products_admin, migrate
 from catalystsa.routes.test_orders import router_test
+from catalystsa.migrate_add_sales_views import run_migration as run_sales_views_migration
+from catalystsa.migrate_add_categories import run_migration as run_categories_migration
 
 app = FastAPI()
 
@@ -25,6 +27,19 @@ app.add_middleware(
 
 # Create tables if they don't exist
 Base.metadata.create_all(bind=engine)
+
+
+@app.on_event("startup")
+def ensure_migrations():
+    # Run lightweight, idempotent migrations at startup so Render free tier doesn't need shell access
+    try:
+        run_sales_views_migration()
+    except Exception as e:
+        print(f"Migration error (sales/views): {e}")
+    try:
+        run_categories_migration()
+    except Exception as e:
+        print(f"Migration error (categories): {e}")
 
 # Product routes (admin + public)
 app.include_router(products_admin.router, prefix="", tags=["Products"])
