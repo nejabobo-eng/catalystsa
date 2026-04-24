@@ -119,32 +119,37 @@ def list_products_admin(
     if not include_inactive:
         query = query.filter(Product.active == True)
 
-    products = query.order_by(Product.created_at.desc()).all()
+    try:
+        products = query.order_by(Product.created_at.desc()).all()
 
-    return {
-        "products": [
-            {
-                "id": p.id,
-                "name": p.name,
-                "description": p.description,
-                "cost_price": p.cost_price,
-                "cost_display": f"R{p.cost_price / 100:.2f}",
-                "price": p.price,
-                "price_display": f"R{p.price / 100:.2f}",
-                "markup_percent": ((p.price - p.cost_price) / p.cost_price * 100) if p.cost_price > 0 else 0,
-                "image_url": p.image_url,
-                "stock": p.stock,
-                "active": p.active,
-                "weight_kg": p.weight_kg or 0.5,
-                "size_category": p.size_category or "small",
-                "created_at": p.created_at.isoformat() if p.created_at else None,
-                "updated_at": p.updated_at.isoformat() if p.updated_at else None,
-            }
-
-            for p in products
-        ],
-        "total": len(products)
-    }
+        return {
+            "products": [
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "description": p.description,
+                    "cost_price": getattr(p, 'cost_price', None),
+                    "cost_display": f"R{(p.cost_price or 0) / 100:.2f}" if getattr(p, 'cost_price', None) is not None else None,
+                    "price": getattr(p, 'price', None),
+                    "price_display": f"R{(p.price or 0) / 100:.2f}" if getattr(p, 'price', None) is not None else None,
+                    "markup_percent": ((p.price - p.cost_price) / p.cost_price * 100) if getattr(p, 'cost_price', None) and p.cost_price > 0 else 0,
+                    "image_url": p.image_url,
+                    "stock": p.stock,
+                    "active": p.active,
+                    "weight_kg": getattr(p, 'weight_kg', 0.5) or 0.5,
+                    "size_category": getattr(p, 'size_category', 'small') or 'small',
+                    "created_at": p.created_at.isoformat() if p.created_at else None,
+                    "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+                }
+                for p in products
+            ],
+            "total": len(products)
+        }
+    except Exception as e:
+        # Don't crash admin UI - return empty list and log error
+        import traceback
+        traceback.print_exc()
+        return {"products": [], "total": 0, "error": str(e)}
 
 @router.get('/admin/categories')
 def list_categories_admin(db: Session = Depends(get_db), admin_id: str = Depends(verify_admin_header)):
@@ -301,6 +306,8 @@ def create_product(
         cost_price=product.cost_price,
         price=selling_price,  # Auto-calculated
         image_url=product.image_url,
+        # Only set category_id if provided in payload (guard against missing column)
+        **({"category_id": getattr(product, "category_id") } if hasattr(product, "category_id") and getattr(product, "category_id") is not None else {}),
         stock=product.stock,
         active=product.active,
         weight_kg=product.weight_kg or 0.5,
@@ -484,60 +491,61 @@ def list_products_public(
     - include_out_of_stock: include products with stock <= 0 (default: False)
     """
 
-    # Base: active products
-    query = db.query(Product).filter(Product.active == True)
-
-    # Only filter out of stock when requested (default: exclude out of stock)
-    if not include_out_of_stock:
-        query = query.filter(Product.stock > 0)
-
-    # Apply category filter only when explicitly provided
-    if category_id is not None:
-        # Some existing products may not have category_id set yet; this filter
-        # should only be applied when the client explicitly requests it.
-        query = query.filter(getattr(Product, 'category_id', None) == category_id)
-
-    # Choose ordering
-    if sort == "views":
-        # Use coalesce to treat NULL as 0
-        order_clause = [func.coalesce(Product.views_count, 0).desc(), Product.created_at.desc()]
-    elif sort == "newest":
-        order_clause = [Product.created_at.desc()]
-    elif sort == "sales":
-        order_clause = [func.coalesce(Product.sales_count, 0).desc(), Product.created_at.desc()]
-    else:
-        # Fallback to name ordering
-        order_clause = [Product.name]
-
-    offset = max(page - 1, 0) * max(limit, 1)
-
-    # Attempt to run the preferred query (may reference columns added by migration).
-    # If the database schema hasn't been migrated yet (missing columns), fall
-    # back to a safe query that only orders by created_at.
     try:
-        products = query.order_by(*order_clause).offset(offset).limit(limit).all()
-    except Exception:
-        # Fallback safe query
-        products = query.order_by(Product.created_at.desc()).offset(offset).limit(limit).all()
+        # Base: active products
+        query = db.query(Product).filter(Product.active == True)
 
-    # Build response safely - don't assume views_count/sales_count exist in DB
-    out = []
-    for p in products:
-        out.append({
-            "id": p.id,
-            "name": p.name,
-            "description": p.description,
-            "price": p.price,
-            "price_display": f"R{p.price / 100:.2f}",
-            "image_url": p.image_url,
-            "stock": p.stock,
-            "weight_kg": p.weight_kg or 0.5,
-            "size_category": p.size_category or "small",
-            "views_count": getattr(p, 'views_count', 0) or 0,
-            "sales_count": getattr(p, 'sales_count', 0) or 0,
-        })
+        # Only filter out of stock when requested (default: exclude out of stock)
+        if not include_out_of_stock:
+            query = query.filter(Product.stock > 0)
 
-    return {"products": out}
+        # Apply category filter only when explicitly provided
+        if category_id is not None:
+            # Some existing products may not have category_id set yet; this filter
+            # should only be applied when the client explicitly requests it.
+            query = query.filter(getattr(Product, 'category_id', None) == category_id)
+
+        # Choose ordering
+        if sort == "views":
+            # Use coalesce to treat NULL as 0
+            order_clause = [func.coalesce(Product.views_count, 0).desc(), Product.created_at.desc()]
+        elif sort == "newest":
+            order_clause = [Product.created_at.desc()]
+        elif sort == "sales":
+            order_clause = [func.coalesce(Product.sales_count, 0).desc(), Product.created_at.desc()]
+        else:
+            # Fallback to name ordering
+            order_clause = [Product.name]
+
+        offset = max(page - 1, 0) * max(limit, 1)
+
+        # Attempt to run the preferred query (may reference columns added by migration).
+        # If the database schema hasn't been migrated yet (missing columns), fall
+        # back to a safe query that only orders by created_at.
+        try:
+            products = query.order_by(*order_clause).offset(offset).limit(limit).all()
+        except Exception:
+            # Fallback safe query
+            products = query.order_by(Product.created_at.desc()).offset(offset).limit(limit).all()
+
+        # Build response safely - don't assume views_count/sales_count exist in DB
+        out = []
+        for p in products:
+            out.append({
+                "id": p.id,
+                "name": p.name,
+                "description": p.description,
+                "price": p.price,
+                "price_display": f"R{p.price / 100:.2f}",
+                "image_url": p.image_url,
+                "stock": p.stock,
+                "weight_kg": p.weight_kg or 0.5,
+                "size_category": p.size_category or "small",
+                "views_count": getattr(p, 'views_count', 0) or 0,
+                "sales_count": getattr(p, 'sales_count', 0) or 0,
+            })
+
+        return {"products": out}
     except Exception as e:
         # Log traceback to stdout/stderr for Render logs and return safe error
         import traceback
