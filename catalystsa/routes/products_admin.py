@@ -405,16 +405,40 @@ def get_product_admin(
 @router.get("/products")
 def list_products_public(
     db: Session = Depends(get_db),
-    limit: int = 100
+    sort: Optional[str] = "views",  # views | newest | sales
+    limit: int = 100,
+    page: int = 1,
+    include_out_of_stock: bool = False
 ):
     """
     Public product catalog
-    Returns only active products with stock > 0
+    Supports server-side sorting and pagination.
+
+    Query params:
+    - sort: views | newest | sales (default: views)
+    - limit: items per page (default: 100)
+    - page: page number (default: 1)
+    - include_out_of_stock: include products with stock <= 0 (default: False)
     """
-    products = db.query(Product).filter(
-        Product.active == True,
-        Product.stock > 0
-    ).order_by(Product.name).limit(limit).all()
+
+    query = db.query(Product).filter(Product.active == True)
+    if not include_out_of_stock:
+        query = query.filter(Product.stock > 0)
+
+    # Choose ordering
+    if sort == "views":
+        # Use coalesce to treat NULL as 0
+        order_clause = [func.coalesce(Product.views_count, 0).desc(), Product.created_at.desc()]
+    elif sort == "newest":
+        order_clause = [Product.created_at.desc()]
+    elif sort == "sales":
+        order_clause = [func.coalesce(Product.sales_count, 0).desc(), Product.created_at.desc()]
+    else:
+        # Fallback to name ordering
+        order_clause = [Product.name]
+
+    offset = max(page - 1, 0) * max(limit, 1)
+    products = query.order_by(*order_clause).offset(offset).limit(limit).all()
 
     return {
         "products": [
@@ -428,6 +452,8 @@ def list_products_public(
                 "stock": p.stock,
                 "weight_kg": p.weight_kg or 0.5,
                 "size_category": p.size_category or "small",
+                "views_count": p.views_count or 0,
+                "sales_count": p.sales_count or 0,
             }
             for p in products
         ]
