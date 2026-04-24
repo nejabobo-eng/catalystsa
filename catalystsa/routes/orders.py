@@ -1,18 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from catalystsa.database import SessionLocal
+from catalystsa.database import SessionLocal, get_db
 from catalystsa.models import Order, Product
 from catalystsa.schemas import OrderCreate
 
 router = APIRouter()
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# Use centralized get_db from catalystsa.database for consistent rollback behavior
 
 
 @router.post("/")

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Header, Depends
 from sqlalchemy.orm import Session
-from catalystsa.database import SessionLocal
+from catalystsa.database import SessionLocal, get_db
 from catalystsa.models import Order
 from catalystsa.admin_auth import create_token, verify_token, ADMIN_PASSWORD
 import logging
@@ -10,12 +10,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# Use centralized get_db from catalystsa.database for consistent rollback behavior
 
 
 def verify_admin_header(authorization: str = Header(None)):
